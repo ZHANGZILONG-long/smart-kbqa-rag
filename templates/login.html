@@ -112,6 +112,14 @@
       color: var(--danger);
     }
     .msg.ok { color: var(--ok); }
+    .switch {
+      margin-top: 18px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .switch a { color: #93c5fd; text-decoration: none; }
+    .switch a:hover { text-decoration: underline; }
     .hint {
       margin-top: 20px;
       padding-top: 16px;
@@ -149,6 +157,8 @@
       <button id="submit-btn" type="submit">登录</button>
       <p id="msg" class="msg" aria-live="polite"></p>
     </form>
+
+    <div class="switch">还没有账号？ <a href="/register/">立即注册</a></div>
 
     <div class="hint">
       开发测试账号：<br />

@@ -15,6 +15,11 @@ urlpatterns = [
         name='login-page',
     ),
     path(
+        'register/',
+        TemplateView.as_view(template_name='register.html'),
+        name='register-page',
+    ),
+    path(
         'home/',
         TemplateView.as_view(template_name='home.html'),
         name='home-page',
