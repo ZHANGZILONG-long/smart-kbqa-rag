@@ -1,9 +1,30 @@
 from celery import shared_task
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
+import logging
+
+logger = logging.getLogger('smartkbqa.documents')
 
 
-@shared_task(bind=True, max_retries=2, default_retry_delay=10)
+def _send_alert(title: str, detail: dict):
+    url = getattr(settings, 'ALERT_WEBHOOK_URL', '') or ''
+    if not url:
+        logger.error('ALERT %s %s', title, detail)
+        return
+    try:
+        import requests
+
+        requests.post(
+            url,
+            json={'title': title, 'detail': detail, 'service': 'smartkbqa'},
+            timeout=5,
+        )
+    except Exception:
+        logger.exception('alert webhook failed')
+
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=15)
 def process_document_task(self, document_id: int):
     from documents.models import Document, DocumentChunk
     from documents.services.chunking import split_text
@@ -16,6 +37,16 @@ def process_document_task(self, document_id: int):
         )
     except Document.DoesNotExist:
         return {'ok': False, 'reason': 'not_found'}
+
+    if document.status in (
+        Document.Status.PENDING_APPROVAL,
+        Document.Status.REJECTED,
+    ):
+        return {
+            'ok': False,
+            'reason': 'not_approved',
+            'status': document.status,
+        }
 
     Document.objects.filter(pk=document_id).update(
         status=Document.Status.PROCESSING,
@@ -75,12 +106,34 @@ def process_document_task(self, document_id: int):
                 error_message='',
                 updated_at=timezone.now(),
             )
+        logger.info(
+            'document processed id=%s chunks=%s', document.id, len(chunks)
+        )
         return {'ok': True, 'document_id': document.id, 'chunk_count': len(chunks)}
     except Exception as exc:
+        retries = getattr(self.request, 'retries', 0)
+        max_retries = self.max_retries or 3
+        if retries < max_retries and not settings.CELERY_TASK_ALWAYS_EAGER:
+            logger.warning(
+                'document process retry id=%s attempt=%s err=%s',
+                document_id,
+                retries + 1,
+                exc,
+            )
+            raise self.retry(exc=exc, countdown=15 * (retries + 1))
+
         Document.objects.filter(pk=document_id).update(
             status=Document.Status.FAILED,
             error_message=str(exc)[:2000],
             updated_at=timezone.now(),
         )
-        # 不向上抛：上传接口应返回文档记录，由 status=failed 表达结果
+        _send_alert(
+            'document_process_failed',
+            {
+                'document_id': document_id,
+                'error': str(exc)[:500],
+                'retries': retries,
+            },
+        )
+        logger.exception('document process failed id=%s', document_id)
         return {'ok': False, 'document_id': document_id, 'error': str(exc)[:500]}

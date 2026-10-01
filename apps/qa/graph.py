@@ -21,7 +21,7 @@ class QAState(TypedDict, total=False):
     search_query: str
     top_k: int
     user_id: int
-    is_admin: bool
+    is_super_admin: bool
     department_id: int | None
     hits: list[dict]
     grade: str
@@ -115,7 +115,8 @@ def hits_to_sources(hits: list[dict]) -> list[dict]:
 
 
 def _access_where(state: QAState) -> dict | None:
-    if state.get('is_admin'):
+    """与 documents.permissions.chroma_access_filter 一致：仅总管理员不过滤。"""
+    if state.get('is_super_admin'):
         return None
     department_id = state.get('department_id')
     if department_id:
@@ -429,7 +430,7 @@ def run_qa(user, question: str, top_k: int = 5) -> dict:
         'question': (question or '').strip(),
         'top_k': int(top_k or 5),
         'user_id': getattr(user, 'id', 0) or 0,
-        'is_admin': bool(getattr(user, 'is_admin', False)),
+        'is_super_admin': bool(getattr(user, 'is_super_admin', False)),
         'department_id': getattr(user, 'department_id', None),
         'hits': [],
         'attempt': 0,

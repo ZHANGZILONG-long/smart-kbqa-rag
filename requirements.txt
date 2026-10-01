@@ -21,4 +21,4 @@ pybloom-live
 ldap3
 pyjwt
 gunicorn
-psutil
+requests

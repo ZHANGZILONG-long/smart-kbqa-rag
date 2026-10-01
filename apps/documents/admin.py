@@ -20,6 +20,7 @@ class DocumentAdmin(admin.ModelAdmin):
         'status',
         'chunk_count',
         'uploader',
+        'reviewed_by',
         'created_at',
     )
     list_filter = ('status', 'visibility', 'file_type', 'department')
@@ -31,6 +32,8 @@ class DocumentAdmin(admin.ModelAdmin):
         'file_size',
         'chunk_count',
         'error_message',
+        'reviewed_by',
+        'reviewed_at',
         'created_at',
         'updated_at',
     )

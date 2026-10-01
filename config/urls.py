@@ -9,6 +9,7 @@ urlpatterns = [
     path('api/auth/', include('accounts.urls')),
     path('api/documents/', include('documents.urls')),
     path('api/qa/', include('qa.urls')),
+    path('api/', include('common.urls')),
     path(
         'login/',
         TemplateView.as_view(template_name='login.html'),
@@ -20,8 +21,34 @@ urlpatterns = [
         name='register-page',
     ),
     path(
+        'qa/',
+        TemplateView.as_view(template_name='qa.html'),
+        name='qa-page',
+    ),
+    path(
+        'profile/',
+        TemplateView.as_view(template_name='profile.html'),
+        name='profile-page',
+    ),
+    path(
+        'documents/',
+        TemplateView.as_view(template_name='documents.html'),
+        name='documents-page',
+    ),
+    path(
+        'upload/',
+        TemplateView.as_view(template_name='upload.html'),
+        name='upload-page',
+    ),
+    path(
+        'staff/',
+        TemplateView.as_view(template_name='staff.html'),
+        name='staff-page',
+    ),
+    # 兼容旧入口
+    path(
         'home/',
-        TemplateView.as_view(template_name='home.html'),
+        RedirectView.as_view(pattern_name='qa-page', permanent=False),
         name='home-page',
     ),
     path('', RedirectView.as_view(pattern_name='login-page', permanent=False)),

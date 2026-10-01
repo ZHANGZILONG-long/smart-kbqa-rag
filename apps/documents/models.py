@@ -16,6 +16,8 @@ class Document(models.Model):
         DEPARTMENT = 'department', '部门可见'
 
     class Status(models.TextChoices):
+        PENDING_APPROVAL = 'pending_approval', '待审批'
+        REJECTED = 'rejected', '已驳回'
         PENDING = 'pending', '待处理'
         PROCESSING = 'processing', '处理中'
         READY = 'ready', '已就绪'
@@ -49,15 +51,34 @@ class Document(models.Model):
     )
     status = models.CharField(
         '处理状态',
-        max_length=16,
+        max_length=20,
         choices=Status.choices,
         default=Status.PENDING,
         db_index=True,
     )
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        verbose_name='审批人',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='reviewed_documents',
+    )
+    reviewed_at = models.DateTimeField('审批时间', null=True, blank=True)
+    review_note = models.CharField('审批备注', max_length=500, blank=True)
     chunk_count = models.PositiveIntegerField('分块数量', default=0)
     error_message = models.TextField('错误信息', blank=True)
     created_at = models.DateTimeField('创建时间', auto_now_add=True)
     updated_at = models.DateTimeField('更新时间', auto_now=True)
+
+    @property
+    def needs_approval(self) -> bool:
+        return self.status == self.Status.PENDING_APPROVAL
+
+    @property
+    def is_searchable(self) -> bool:
+        """已入库、可供检索的文档。"""
+        return self.status == self.Status.READY
 
     class Meta:
         verbose_name = '文档'
