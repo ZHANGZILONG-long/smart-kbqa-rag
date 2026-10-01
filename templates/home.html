@@ -201,6 +201,7 @@
       <p id="ask-msg" class="msg"></p>
       <div id="answer" class="answer" style="margin-top:12px">回答会显示在这里</div>
       <ol id="sources" class="sources"></ol>
+      <div id="steps" class="sources" style="margin-top:8px"></div>
     </section>
   </main>
 
@@ -366,15 +367,17 @@
       const msg = document.getElementById('ask-msg');
       const answerEl = document.getElementById('answer');
       const sourcesEl = document.getElementById('sources');
+      const stepsEl = document.getElementById('steps');
       if (!q) {
         setMsg(msg, '请输入问题', 'err');
         return;
       }
       const btn = document.getElementById('ask-btn');
       btn.disabled = true;
-      setMsg(msg, '检索与生成中…');
+      setMsg(msg, '多步检索与生成中…');
       answerEl.textContent = '…';
       sourcesEl.innerHTML = '';
+      stepsEl.innerHTML = '';
       try {
         const data = await api('/api/qa/ask/', {
           method: 'POST',
@@ -386,7 +389,15 @@
         sourcesEl.innerHTML = sources.map((s, i) =>
           `<li>[${i + 1}] 《${escapeHtml(s.title || '')}》 score=${s.score != null ? Number(s.score).toFixed(3) : '-'}<br/>${escapeHtml(s.snippet || '')}</li>`
         ).join('');
-        setMsg(msg, `完成，命中 ${data.hit_count || 0} 条片段`, 'ok');
+        const steps = data.steps || [];
+        if (steps.length) {
+          stepsEl.innerHTML = '<strong>LangGraph 步骤</strong><ol>' + steps.map(st =>
+            `<li><code>${escapeHtml(st.node || '')}</code> ${escapeHtml(st.detail || st.reason || '')}` +
+            (st.search_query ? ` · 查询：${escapeHtml(st.search_query)}` : '') +
+            `</li>`
+          ).join('') + '</ol>';
+        }
+        setMsg(msg, `完成（${data.engine || 'langgraph'}），命中 ${data.hit_count || 0} 条`, 'ok');
       } catch (err) {
         answerEl.textContent = '';
         setMsg(msg, err.message || '提问失败', 'err');

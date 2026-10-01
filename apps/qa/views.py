@@ -67,6 +67,11 @@ class AskView(APIView):
                 'sources': result['sources'],
                 'hit_count': result['hit_count'],
                 'message_id': assistant.id,
+                'engine': result.get('engine', 'langgraph'),
+                'search_query': result.get('search_query'),
+                'grade': result.get('grade'),
+                'grade_reason': result.get('grade_reason'),
+                'steps': result.get('steps') or [],
             }
         )
 
