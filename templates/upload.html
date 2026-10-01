@@ -1,0 +1,177 @@
+{% extends "app_base.html" %}
+{% block title %}上传文档 · SmartKBQA{% endblock %}
+{% block page_id %}upload{% endblock %}
+{% block extra_css %}
+<style>
+  .progress-bar {
+    height: 10px; background: var(--line); border-radius: 999px; overflow: hidden; margin-top: 12px;
+  }
+  .progress-bar > span {
+    display: block; height: 100%; width: 0%;
+    background: linear-gradient(90deg, #3b82f6, #22d3ee);
+    transition: width .15s ease;
+  }
+</style>
+{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>上传文档</h1>
+  <p class="sub" id="upload-hint">支持 pdf / docx / txt / md。可查看上传进度。</p>
+  <form id="upload-form">
+    <div class="row">
+      <div class="field">
+        <label for="file">文件</label>
+        <input id="file" name="file" type="file" accept=".pdf,.docx,.txt,.md" required />
+      </div>
+      <div class="field">
+        <label for="title">标题（可选）</label>
+        <input id="title" name="title" type="text" placeholder="默认用文件名" />
+      </div>
+      <div class="field">
+        <label for="visibility">可见范围</label>
+        <select id="visibility" name="visibility">
+          <option value="department">部门可见</option>
+          <option value="public">全员可见</option>
+        </select>
+      </div>
+      <div class="field" id="department-field" hidden>
+        <label for="department_id">目标部门</label>
+        <select id="department_id" name="department_id"></select>
+      </div>
+    </div>
+    <div class="row">
+      <button class="primary" id="upload-btn" type="submit">上传并处理</button>
+      <a class="btn" href="/documents/">查看文档列表</a>
+    </div>
+    <div class="progress-bar" id="upload-progress" hidden><span id="upload-progress-bar"></span></div>
+    <p id="upload-pct" class="msg" style="margin-top:6px"></p>
+    <p id="upload-msg" class="msg"></p>
+  </form>
+</section>
+{% endblock %}
+{% block extra_js %}
+<script>
+  window.onAppReady = async function (user) {
+    if (!user.can_upload) return;
+
+    const vis = document.getElementById('visibility');
+    const deptField = document.getElementById('department-field');
+    const hint = document.getElementById('upload-hint');
+
+    vis.innerHTML = '';
+    const optDept = document.createElement('option');
+    optDept.value = 'department';
+    optDept.textContent = '部门可见';
+    vis.appendChild(optDept);
+
+    if (user.is_super_admin) {
+      const optPub = document.createElement('option');
+      optPub.value = 'public';
+      optPub.textContent = '全员可见';
+      vis.appendChild(optPub);
+      deptField.hidden = false;
+      hint.textContent = '总管理员可上传全员文档，或指定部门的部门文档（直接入库，无需审批）。';
+      try {
+        const data = await KB.api('/api/auth/departments/', { headers: KB.headersAuth });
+        const rows = data.results || [];
+        const sel = document.getElementById('department_id');
+        sel.innerHTML = rows.map(d =>
+          `<option value="${d.id}">${KB.escapeHtml(d.name)} (${KB.escapeHtml(d.code)})</option>`
+        ).join('');
+        if (user.department && user.department.id) {
+          sel.value = String(user.department.id);
+        }
+      } catch (_) {
+        document.getElementById('department_id').innerHTML = '<option value="">加载部门失败</option>';
+      }
+      vis.onchange = () => {
+        deptField.hidden = vis.value === 'public';
+      };
+    } else {
+      deptField.hidden = true;
+      hint.textContent = '你只能上传本部门文档；提交后需总管理员审批通过才会解析入库。';
+    }
+
+    function setProgress(pct, show, text) {
+      const wrap = document.getElementById('upload-progress');
+      const bar = document.getElementById('upload-progress-bar');
+      const pctEl = document.getElementById('upload-pct');
+      wrap.hidden = !show;
+      bar.style.width = Math.max(0, Math.min(100, pct || 0)) + '%';
+      pctEl.textContent = text || (show ? (`上传进度 ${Math.round(pct || 0)}%`) : '');
+    }
+
+    document.getElementById('upload-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const msg = document.getElementById('upload-msg');
+      const btn = document.getElementById('upload-btn');
+      const fileInput = document.getElementById('file');
+      if (!fileInput.files[0]) return;
+      const fd = new FormData();
+      fd.append('file', fileInput.files[0]);
+      const title = document.getElementById('title').value.trim();
+      if (title) fd.append('title', title);
+      const visibility = document.getElementById('visibility').value;
+      fd.append('visibility', visibility);
+      if (user.is_super_admin && visibility === 'department') {
+        const deptId = document.getElementById('department_id').value;
+        if (!deptId) {
+          KB.setMsg(msg, '请选择目标部门', 'err');
+          return;
+        }
+        fd.append('department_id', deptId);
+      }
+
+      btn.disabled = true;
+      KB.setMsg(msg, '上传中…');
+      setProgress(0, true);
+
+      try {
+        const data = await new Promise((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open('POST', '/api/documents/');
+          xhr.setRequestHeader('Authorization', 'Bearer ' + (KB.access || localStorage.getItem('access_token')));
+          xhr.upload.onprogress = (ev) => {
+            if (!ev.lengthComputable) return;
+            const pct = (ev.loaded / ev.total) * 100;
+            setProgress(pct, true);
+          };
+          xhr.onload = () => {
+            let body = null;
+            try { body = JSON.parse(xhr.responseText || '{}'); } catch (_) { body = xhr.responseText; }
+            if (xhr.status === 401) {
+              localStorage.clear();
+              window.location.replace('/login/');
+              reject(new Error('未登录'));
+              return;
+            }
+            if (xhr.status >= 200 && xhr.status < 300) resolve(body);
+            else {
+              const detail = (body && (body.detail || JSON.stringify(body))) || xhr.statusText;
+              reject(new Error(detail));
+            }
+          };
+          xhr.onerror = () => reject(new Error('网络错误'));
+          xhr.send(fd);
+        });
+
+        setProgress(100, true, '上传完成，服务端处理中…');
+        const doc = data.document || {};
+        if (data.awaiting_approval || doc.status === 'pending_approval') {
+          KB.setMsg(msg, `已提交 #${doc.id}，等待总管理员审批后入库`, 'ok');
+        } else {
+          KB.setMsg(msg, `上传成功 #${doc.id}，状态：${doc.status_display || doc.status}`, 'ok');
+        }
+        fileInput.value = '';
+        document.getElementById('title').value = '';
+        setTimeout(() => setProgress(0, false), 800);
+      } catch (err) {
+        KB.setMsg(msg, err.message || '上传失败', 'err');
+        setProgress(0, false);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  };
+</script>
+{% endblock %}

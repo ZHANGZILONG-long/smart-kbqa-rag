@@ -136,7 +136,7 @@
 
   <script>
     if (localStorage.getItem('access_token')) {
-      window.location.replace('/home/');
+      window.location.replace('/qa/');
     }
 
     const form = document.getElementById('register-form');
@@ -202,7 +202,7 @@
 
         msg.classList.add('ok');
         msg.textContent = '注册成功，正在进入工作台…';
-        window.location.href = '/home/';
+        window.location.href = '/qa/';
       } catch (err) {
         msg.textContent = err.message || '注册失败，请稍后重试';
       } finally {

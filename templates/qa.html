@@ -1,0 +1,268 @@
+{% extends "app_base.html" %}
+{% block title %}知识问答 · SmartKBQA{% endblock %}
+{% block page_id %}qa{% endblock %}
+{% block extra_css %}
+<style>
+  .qa-layout { display: grid; grid-template-columns: 240px 1fr; gap: 16px; }
+  @media (max-width: 800px) { .qa-layout { grid-template-columns: 1fr; } }
+  .session-item {
+    display: block; width: 100%; text-align: left;
+    padding: 10px 12px; margin-bottom: 6px; border-radius: 10px;
+    border: 1px solid var(--line); background: transparent; color: var(--text);
+    cursor: pointer; font: inherit;
+  }
+  .session-item:hover, .session-item.active { border-color: var(--primary); background: #1e293b; }
+  .session-item .t { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .session-item .d { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .progress-bar {
+    height: 6px; background: var(--line); border-radius: 999px; overflow: hidden; margin-top: 10px;
+  }
+  .progress-bar > span {
+    display: block; height: 100%; width: 0%;
+    background: linear-gradient(90deg, #3b82f6, #06b6d4);
+    transition: width .2s;
+  }
+</style>
+{% endblock %}
+{% block content %}
+<div class="qa-layout">
+  <section class="card" style="padding:16px">
+    <div class="row" style="justify-content:space-between;margin-bottom:10px">
+      <h2 style="margin:0;font-size:15px">会话历史</h2>
+      <button type="button" id="new-session-btn" style="padding:4px 10px;font-size:12px">新会话</button>
+    </div>
+    <div id="session-list"><p class="sub">加载中…</p></div>
+  </section>
+
+  <section class="card">
+    <h1>知识库问答</h1>
+    <p class="sub" id="qa-hint">按权限检索；支持流式输出与会话历史。</p>
+    <p class="sub" id="session-label" style="margin-top:-8px">当前：新会话</p>
+    <div class="field">
+      <label for="question">问题</label>
+      <textarea id="question" placeholder="例如：这份制度里请假流程是什么？"></textarea>
+    </div>
+    <div class="row">
+      <button class="primary" id="ask-btn" type="button">提问（流式）</button>
+      <label class="sub" style="margin:0;display:flex;align-items:center;gap:6px">
+        <input type="checkbox" id="use-stream" checked /> 流式输出
+      </label>
+    </div>
+    <div class="progress-bar" id="ask-progress" hidden><span></span></div>
+    <p id="ask-msg" class="msg"></p>
+    <div id="answer" class="answer" style="margin-top:12px">回答会显示在这里</div>
+    <ol id="sources" class="sources"></ol>
+    <div id="steps" class="sources" style="margin-top:8px"></div>
+  </section>
+</div>
+{% endblock %}
+{% block extra_js %}
+<script>
+  window.onAppReady = async function (user) {
+    let currentSessionId = null;
+    const hint = document.getElementById('qa-hint');
+    if (user.is_super_admin) {
+      hint.textContent = '总管理员可检索全部已入库文档；支持 SSE 流式输出。';
+    } else if (user.department) {
+      hint.textContent = '按部门权限检索已入库文档；待审批文档不参与问答。';
+    } else {
+      hint.textContent = '未分配部门时仅可检索全员可见且已入库文档。';
+    }
+
+    function setSessionLabel(text) {
+      document.getElementById('session-label').textContent = '当前：' + text;
+    }
+
+    async function loadSessions() {
+      const box = document.getElementById('session-list');
+      try {
+        const data = await KB.api('/api/qa/sessions/', { headers: KB.headersAuth });
+        const rows = data.results || [];
+        if (!rows.length) {
+          box.innerHTML = '<p class="sub">暂无历史会话</p>';
+          return;
+        }
+        box.innerHTML = rows.map(s => `
+          <button type="button" class="session-item ${s.id === currentSessionId ? 'active' : ''}" data-sid="${s.id}">
+            <div class="t">${KB.escapeHtml(s.title || ('会话 #' + s.id))}</div>
+            <div class="d">${KB.escapeHtml(String(s.updated_at || '').replace('T', ' ').slice(0, 19))}</div>
+          </button>
+        `).join('');
+      } catch (e) {
+        box.innerHTML = `<p class="msg err">${KB.escapeHtml(e.message)}</p>`;
+      }
+    }
+
+    async function openSession(id) {
+      currentSessionId = id;
+      setSessionLabel('会话 #' + id);
+      await loadSessions();
+      try {
+        const data = await KB.api('/api/qa/sessions/' + id + '/', { headers: KB.headersAuth });
+        const msgs = data.messages || [];
+        const lastA = [...msgs].reverse().find(m => m.role === 'assistant');
+        const lastU = [...msgs].reverse().find(m => m.role === 'user');
+        if (lastU) document.getElementById('question').value = lastU.content || '';
+        document.getElementById('answer').textContent = lastA ? lastA.content : '（该会话暂无助手回复）';
+        const sources = (lastA && lastA.sources) || [];
+        document.getElementById('sources').innerHTML = sources.map((s, i) =>
+          `<li>[${i + 1}] 《${KB.escapeHtml(s.title || '')}》 ${KB.escapeHtml(s.snippet || '')}</li>`
+        ).join('');
+        document.getElementById('steps').innerHTML = '';
+        KB.setMsg(document.getElementById('ask-msg'), '已加载会话历史', 'ok');
+      } catch (e) {
+        KB.setMsg(document.getElementById('ask-msg'), e.message, 'err');
+      }
+    }
+
+    document.getElementById('session-list').addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-sid]');
+      if (!btn) return;
+      openSession(Number(btn.getAttribute('data-sid')));
+    });
+
+    document.getElementById('new-session-btn').addEventListener('click', () => {
+      currentSessionId = null;
+      setSessionLabel('新会话');
+      document.getElementById('question').value = '';
+      document.getElementById('answer').textContent = '回答会显示在这里';
+      document.getElementById('sources').innerHTML = '';
+      document.getElementById('steps').innerHTML = '';
+      KB.setMsg(document.getElementById('ask-msg'), '');
+      loadSessions();
+    });
+
+    function setProgress(pct, show) {
+      const bar = document.getElementById('ask-progress');
+      const span = bar.querySelector('span');
+      bar.hidden = !show;
+      span.style.width = (pct || 0) + '%';
+    }
+
+    async function askStream(body) {
+      const answerEl = document.getElementById('answer');
+      answerEl.textContent = '';
+      setProgress(15, true);
+      const res = await fetch('/api/qa/ask/', {
+        method: 'POST',
+        headers: KB.headersJson,
+        body: JSON.stringify({ ...body, stream: true }),
+      });
+      if (res.status === 401) {
+        localStorage.clear();
+        window.location.replace('/login/');
+        throw new Error('未登录');
+      }
+      if (!res.ok || !res.body) {
+        let detail = res.statusText;
+        try {
+          const j = await res.json();
+          detail = j.detail || JSON.stringify(j);
+        } catch (_) {}
+        throw new Error(detail);
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      let finalPayload = null;
+      let pct = 20;
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const parts = buf.split('\n\n');
+        buf = parts.pop() || '';
+        for (const block of parts) {
+          const lines = block.split('\n');
+          let event = 'message';
+          let dataLine = '';
+          for (const line of lines) {
+            if (line.startsWith('event:')) event = line.slice(6).trim();
+            if (line.startsWith('data:')) dataLine += line.slice(5).trim();
+          }
+          if (!dataLine) continue;
+          let data;
+          try { data = JSON.parse(dataLine); } catch (_) { continue; }
+          if (event === 'token' && data.text) {
+            answerEl.textContent += data.text;
+            pct = Math.min(90, pct + 3);
+            setProgress(pct, true);
+          } else if (event === 'done') {
+            finalPayload = data;
+            if (data.answer) answerEl.textContent = data.answer;
+          } else if (event === 'error') {
+            throw new Error(data.detail || '流式问答失败');
+          } else if (event === 'status' && data.session_id) {
+            currentSessionId = data.session_id;
+          }
+        }
+      }
+      setProgress(100, true);
+      setTimeout(() => setProgress(0, false), 400);
+      return finalPayload;
+    }
+
+    async function askJson(body) {
+      setProgress(40, true);
+      const data = await KB.api('/api/qa/ask/', {
+        method: 'POST',
+        headers: KB.headersJson,
+        body: JSON.stringify(body),
+      });
+      setProgress(100, true);
+      setTimeout(() => setProgress(0, false), 300);
+      return data;
+    }
+
+    document.getElementById('ask-btn').addEventListener('click', async () => {
+      const q = document.getElementById('question').value.trim();
+      const msg = document.getElementById('ask-msg');
+      const answerEl = document.getElementById('answer');
+      const sourcesEl = document.getElementById('sources');
+      const stepsEl = document.getElementById('steps');
+      if (!q) {
+        KB.setMsg(msg, '请输入问题', 'err');
+        return;
+      }
+      const btn = document.getElementById('ask-btn');
+      btn.disabled = true;
+      KB.setMsg(msg, '检索与生成中…');
+      sourcesEl.innerHTML = '';
+      stepsEl.innerHTML = '';
+      const body = { question: q, top_k: 5 };
+      if (currentSessionId) body.session_id = currentSessionId;
+      try {
+        const useStream = document.getElementById('use-stream').checked;
+        const data = useStream ? await askStream(body) : await askJson(body);
+        if (!data) throw new Error('未收到完整回答');
+        currentSessionId = data.session_id || currentSessionId;
+        setSessionLabel(currentSessionId ? ('会话 #' + currentSessionId) : '新会话');
+        if (!useStream) answerEl.textContent = data.answer || '';
+        const sources = data.sources || [];
+        sourcesEl.innerHTML = sources.map((s, i) =>
+          `<li>[${i + 1}] 《${KB.escapeHtml(s.title || '')}》 score=${s.score != null ? Number(s.score).toFixed(3) : '-'}<br/>${KB.escapeHtml(s.snippet || '')}</li>`
+        ).join('');
+        const steps = data.steps || [];
+        if (steps.length) {
+          stepsEl.innerHTML = '<strong>LangGraph 步骤</strong><ol>' + steps.map(st =>
+            `<li><code>${KB.escapeHtml(st.node || '')}</code> ${KB.escapeHtml(st.detail || st.reason || '')}` +
+            (st.search_query ? ` · 查询：${KB.escapeHtml(st.search_query)}` : '') +
+            `</li>`
+          ).join('') + '</ol>';
+        }
+        KB.setMsg(msg, `完成（${data.engine || 'langgraph'}），命中 ${data.hit_count || 0} 条` +
+          (data.elapsed_ms != null ? `，${data.elapsed_ms}ms` : ''), 'ok');
+        await loadSessions();
+      } catch (err) {
+        if (!document.getElementById('use-stream').checked) answerEl.textContent = '';
+        KB.setMsg(msg, err.message || '提问失败', 'err');
+        setProgress(0, false);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    await loadSessions();
+  };
+</script>
+{% endblock %}

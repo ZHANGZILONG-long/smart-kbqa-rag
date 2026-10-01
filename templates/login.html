@@ -174,7 +174,7 @@
 
     // 已登录则直接进首页
     if (localStorage.getItem('access_token')) {
-      window.location.replace('/home/');
+      window.location.replace('/qa/');
     }
 
     form.addEventListener('submit', async (e) => {
@@ -210,7 +210,7 @@
 
         msg.classList.add('ok');
         msg.textContent = '登录成功，正在跳转…';
-        window.location.href = '/home/';
+        window.location.href = '/qa/';
       } catch (err) {
         msg.textContent = err.message || '登录失败，请稍后重试';
       } finally {

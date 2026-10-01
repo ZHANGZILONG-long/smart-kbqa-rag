@@ -1,0 +1,284 @@
+{% extends "app_base.html" %}
+{% block title %}员工管理 · SmartKBQA{% endblock %}
+{% block page_id %}staff{% endblock %}
+{% block content %}
+<section class="card">
+  <div class="row" style="justify-content:space-between;margin-bottom:8px">
+    <h1 style="margin:0">员工管理</h1>
+    <button type="button" id="refresh-staff">刷新</button>
+  </div>
+  <p class="sub" id="staff-hint" style="margin-top:0"></p>
+  <div class="row" style="margin-bottom:12px">
+    <div class="field" style="min-width:180px">
+      <label for="staff-q">搜索</label>
+      <input id="staff-q" type="text" placeholder="用户名 / 邮箱 / 姓名" />
+    </div>
+    <div class="field" style="min-width:140px" id="staff-dept-filter-wrap" hidden>
+      <label for="staff-dept-filter">部门</label>
+      <select id="staff-dept-filter">
+        <option value="">全部部门</option>
+      </select>
+    </div>
+    <div class="field" style="min-width:140px">
+      <label for="staff-role-filter">角色</label>
+      <select id="staff-role-filter">
+        <option value="">全部角色</option>
+        <option value="user">普通员工</option>
+        <option value="dept_admin">部门管理员</option>
+        <option value="super_admin">总管理员</option>
+      </select>
+    </div>
+    <div class="field" style="min-width:120px;align-self:flex-end">
+      <button type="button" id="staff-search-btn" class="primary">查询</button>
+    </div>
+  </div>
+  <div style="overflow-x:auto">
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th><th>用户名</th><th>姓名</th><th>邮箱</th><th>部门</th><th>角色</th><th>状态</th><th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="staff-tbody">
+        <tr><td colspan="8">加载中…</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p id="staff-msg" class="msg"></p>
+</section>
+
+<section class="card" id="staff-edit-panel" style="display:none">
+  <h2 style="margin-top:0">编辑员工 #<span id="edit-staff-id"></span></h2>
+  <input type="hidden" id="edit-pk" />
+  <div class="row">
+    <div class="field">
+      <label>用户名</label>
+      <input id="edit-username" type="text" disabled />
+    </div>
+    <div class="field">
+      <label for="edit-email">邮箱</label>
+      <input id="edit-email" type="email" />
+    </div>
+    <div class="field">
+      <label for="edit-first-name">名</label>
+      <input id="edit-first-name" type="text" />
+    </div>
+    <div class="field">
+      <label for="edit-last-name">姓</label>
+      <input id="edit-last-name" type="text" />
+    </div>
+  </div>
+  <div class="row">
+    <div class="field" id="edit-role-wrap">
+      <label for="edit-role">角色</label>
+      <select id="edit-role"></select>
+    </div>
+    <div class="field" id="edit-dept-wrap">
+      <label for="edit-department">部门</label>
+      <select id="edit-department"></select>
+    </div>
+    <div class="field">
+      <label for="edit-active">账号状态</label>
+      <select id="edit-active">
+        <option value="true">启用</option>
+        <option value="false">禁用</option>
+      </select>
+    </div>
+  </div>
+  <div class="row">
+    <button type="button" class="primary" id="edit-save-btn">保存</button>
+    <button type="button" id="edit-cancel-btn">取消</button>
+  </div>
+  <p id="edit-msg" class="msg"></p>
+</section>
+{% endblock %}
+{% block extra_js %}
+<script>
+  window.onAppReady = async function (user) {
+    if (!(user.can_manage_staff || user.is_admin)) return;
+
+    const staffHint = document.getElementById('staff-hint');
+    let staffDepartments = [];
+
+    if (user.is_super_admin) {
+      staffHint.textContent = '总管理员可查看全部员工；可将员工设为「某部门管理员」（须指定部门）或总管理员。';
+      document.getElementById('staff-dept-filter-wrap').hidden = false;
+      try {
+        const data = await KB.api('/api/auth/departments/', { headers: KB.headersAuth });
+        staffDepartments = data.results || [];
+        const filter = document.getElementById('staff-dept-filter');
+        filter.innerHTML = '<option value="">全部部门</option>' + staffDepartments.map(d =>
+          `<option value="${d.id}">${KB.escapeHtml(d.name)} (${KB.escapeHtml(d.code)})</option>`
+        ).join('');
+      } catch (_) {
+        staffDepartments = [];
+      }
+    } else {
+      const deptName = (user.department && user.department.name) || '本部门';
+      staffHint.textContent = `你是${deptName}管理员：只能查看${deptName}员工，且只能编辑本部门普通员工。`;
+    }
+
+    async function loadStaff() {
+      const tbody = document.getElementById('staff-tbody');
+      const params = new URLSearchParams();
+      const q = document.getElementById('staff-q').value.trim();
+      if (q) params.set('q', q);
+      const role = document.getElementById('staff-role-filter').value;
+      if (role) params.set('role', role);
+      if (user.is_super_admin) {
+        const dept = document.getElementById('staff-dept-filter').value;
+        if (dept) params.set('department_id', dept);
+      }
+      const qs = params.toString();
+      try {
+        const data = await KB.api('/api/auth/staff/' + (qs ? '?' + qs : ''), {
+          headers: KB.headersAuth,
+        });
+        const rows = data.results || [];
+        if (!rows.length) {
+          tbody.innerHTML = '<tr><td colspan="8">没有匹配的员工</td></tr>';
+          return;
+        }
+        tbody.innerHTML = rows.map(u => {
+          const name = [u.last_name, u.first_name].filter(Boolean).join('') || '-';
+          const dept = u.department ? KB.escapeHtml(u.department.name) : '未分配';
+          const active = u.is_active
+            ? '<span class="badge ready">启用</span>'
+            : '<span class="badge rejected">禁用</span>';
+          const action = u.can_edit
+            ? `<button type="button" data-edit-staff="${u.id}">编辑</button>`
+            : '<span class="sub" style="margin:0">只读</span>';
+          return `<tr>
+            <td>${u.id}</td>
+            <td>${KB.escapeHtml(u.username)}</td>
+            <td>${KB.escapeHtml(name)}</td>
+            <td>${KB.escapeHtml(u.email || '-')}</td>
+            <td>${dept}</td>
+            <td>${KB.escapeHtml(u.role_display || u.role)}</td>
+            <td>${active}</td>
+            <td>${action}</td>
+          </tr>`;
+        }).join('');
+      } catch (e) {
+        tbody.innerHTML = `<tr><td colspan="8">${KB.escapeHtml(e.message)}</td></tr>`;
+      }
+    }
+
+    function openStaffEdit(staff) {
+      document.getElementById('staff-edit-panel').style.display = 'block';
+      document.getElementById('edit-pk').value = staff.id;
+      document.getElementById('edit-staff-id').textContent = staff.id;
+      document.getElementById('edit-username').value = staff.username || '';
+      document.getElementById('edit-email').value = staff.email || '';
+      document.getElementById('edit-first-name').value = staff.first_name || '';
+      document.getElementById('edit-last-name').value = staff.last_name || '';
+      document.getElementById('edit-active').value = staff.is_active ? 'true' : 'false';
+      KB.setMsg(document.getElementById('edit-msg'), '');
+
+      const roleSel = document.getElementById('edit-role');
+      if (user.is_super_admin) {
+        roleSel.disabled = false;
+        roleSel.innerHTML = [
+          ['user', '普通员工'],
+          ['dept_admin', '部门管理员（须指定部门）'],
+          ['super_admin', '总管理员'],
+        ].map(([v, t]) => `<option value="${v}">${t}</option>`).join('');
+        roleSel.value = staff.role || 'user';
+      } else {
+        roleSel.innerHTML = '<option value="user">普通员工</option>';
+        roleSel.value = 'user';
+        roleSel.disabled = true;
+      }
+
+      const deptSel = document.getElementById('edit-department');
+      if (user.is_super_admin) {
+        const opts = ['<option value="">未分配</option>'].concat(
+          staffDepartments.map(d =>
+            `<option value="${d.id}">${KB.escapeHtml(d.name)} (${KB.escapeHtml(d.code)})</option>`
+          )
+        );
+        if (!staffDepartments.length && staff.department) {
+          opts.push(`<option value="${staff.department.id}">${KB.escapeHtml(staff.department.name)}</option>`);
+        }
+        deptSel.innerHTML = opts.join('');
+        deptSel.value = staff.department ? String(staff.department.id) : '';
+        deptSel.disabled = false;
+        roleSel.onchange = () => {
+          if (roleSel.value === 'dept_admin' && !deptSel.value && staffDepartments[0]) {
+            deptSel.value = String(staffDepartments[0].id);
+          }
+        };
+      } else {
+        if (staff.department) {
+          deptSel.innerHTML = `<option value="${staff.department.id}">${KB.escapeHtml(staff.department.name)}</option>`;
+          deptSel.value = String(staff.department.id);
+        } else {
+          deptSel.innerHTML = '<option value="">未分配</option>';
+        }
+        deptSel.disabled = true;
+      }
+      document.getElementById('staff-edit-panel').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    document.getElementById('staff-tbody').addEventListener('click', async (e) => {
+      const id = e.target.getAttribute('data-edit-staff');
+      if (!id) return;
+      try {
+        const staff = await KB.api('/api/auth/staff/' + id + '/', { headers: KB.headersAuth });
+        openStaffEdit(staff);
+      } catch (err) {
+        KB.setMsg(document.getElementById('staff-msg'), err.message || '加载失败', 'err');
+      }
+    });
+
+    document.getElementById('edit-cancel-btn').addEventListener('click', () => {
+      document.getElementById('staff-edit-panel').style.display = 'none';
+    });
+
+    document.getElementById('edit-save-btn').addEventListener('click', async () => {
+      const pk = document.getElementById('edit-pk').value;
+      const msg = document.getElementById('edit-msg');
+      const body = {
+        email: document.getElementById('edit-email').value.trim(),
+        first_name: document.getElementById('edit-first-name').value.trim(),
+        last_name: document.getElementById('edit-last-name').value.trim(),
+        is_active: document.getElementById('edit-active').value === 'true',
+      };
+      if (user.is_super_admin) {
+        body.role = document.getElementById('edit-role').value;
+        const deptVal = document.getElementById('edit-department').value;
+        body.department_id = deptVal ? Number(deptVal) : null;
+        if (body.role === 'dept_admin' && !body.department_id) {
+          KB.setMsg(msg, '设为部门管理员时必须选择部门', 'err');
+          return;
+        }
+      }
+      const btn = document.getElementById('edit-save-btn');
+      btn.disabled = true;
+      KB.setMsg(msg, '保存中…');
+      try {
+        await KB.api('/api/auth/staff/' + pk + '/', {
+          method: 'PATCH',
+          headers: KB.headersJson,
+          body: JSON.stringify(body),
+        });
+        KB.setMsg(document.getElementById('staff-msg'), '员工 #' + pk + ' 已更新', 'ok');
+        document.getElementById('staff-edit-panel').style.display = 'none';
+        await loadStaff();
+      } catch (err) {
+        KB.setMsg(msg, err.message || '保存失败', 'err');
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    document.getElementById('refresh-staff').addEventListener('click', loadStaff);
+    document.getElementById('staff-search-btn').addEventListener('click', loadStaff);
+    document.getElementById('staff-q').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') loadStaff();
+    });
+
+    await loadStaff();
+  };
+</script>
+{% endblock %}

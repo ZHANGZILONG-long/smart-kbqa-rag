@@ -1,0 +1,167 @@
+{% extends "app_base.html" %}
+{% block title %}文档管理 · SmartKBQA{% endblock %}
+{% block page_id %}documents{% endblock %}
+{% block content %}
+<section class="card">
+  <div class="row" style="justify-content:space-between;margin-bottom:8px">
+    <h1 style="margin:0">文档管理</h1>
+    <div class="row">
+      <label id="pending-filter-wrap" class="sub" style="margin:0;display:none;align-items:center;gap:6px">
+        <input type="checkbox" id="only-pending" />
+        仅看待审批
+      </label>
+      <a class="btn primary" href="/upload/" id="btn-go-upload" hidden>上传文档</a>
+      <button type="button" id="refresh-docs">刷新</button>
+    </div>
+  </div>
+  <p class="sub" id="docs-hint" style="margin-top:0"></p>
+  <div style="overflow-x:auto">
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th><th>标题</th><th>类型</th><th>范围</th><th>状态</th><th>分块</th><th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="doc-tbody">
+        <tr><td colspan="7">加载中…</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p id="doc-msg" class="msg"></p>
+</section>
+{% endblock %}
+{% block extra_js %}
+<script>
+  window.onAppReady = async function (user) {
+    const pendingWrap = document.getElementById('pending-filter-wrap');
+    const docsHint = document.getElementById('docs-hint');
+    const goUpload = document.getElementById('btn-go-upload');
+    if (goUpload) goUpload.hidden = !user.can_upload;
+
+    if (user.is_super_admin) {
+      pendingWrap.style.display = 'inline-flex';
+      docsHint.textContent = '部门管理员上传的文档需你审批通过后才会解析入库。';
+    } else if (user.is_dept_admin) {
+      docsHint.textContent = '你上传的文档需总管理员审批通过后才会进入知识库。';
+    } else {
+      docsHint.textContent = '仅展示你有权查看且已审批入库的文档。';
+    }
+
+    async function loadDocs() {
+      const tbody = document.getElementById('doc-tbody');
+      try {
+        let url = '/api/documents/';
+        const onlyPending = document.getElementById('only-pending');
+        if (user.is_super_admin && onlyPending && onlyPending.checked) {
+          url += '?pending_approval=1';
+        }
+        const data = await KB.api(url, { headers: KB.headersAuth });
+        const rows = data.results || [];
+        if (!rows.length) {
+          tbody.innerHTML = '<tr><td colspan="7">暂无文档</td></tr>';
+          return;
+        }
+        tbody.innerHTML = rows.map(d => {
+          const actions = [];
+          if (d.can_approve) {
+            actions.push(`<button type="button" class="ok-btn" data-approve="${d.id}">通过</button>`);
+          }
+          if (d.can_reject) {
+            actions.push(`<button type="button" class="danger" data-reject="${d.id}">驳回</button>`);
+          }
+          if (d.can_reprocess) {
+            actions.push(`<button type="button" data-reprocess="${d.id}">重处理</button>`);
+          }
+          if (d.can_delete) {
+            actions.push(`<button type="button" class="danger" data-del="${d.id}">删除</button>`);
+          }
+          const actionHtml = actions.length
+            ? `<td class="row">${actions.join('')}</td>`
+            : '<td class="sub" style="margin:0">—</td>';
+          const scope = d.visibility_display || d.visibility;
+          const deptName = d.department_name ? ` · ${KB.escapeHtml(d.department_name)}` : '';
+          let statusExtra = '';
+          if (d.review_note) {
+            statusExtra += `<div class="msg err">${KB.escapeHtml(d.review_note)}</div>`;
+          } else if (d.error_message) {
+            statusExtra += `<div class="msg err">${KB.escapeHtml(d.error_message)}</div>`;
+          }
+          if (d.reviewed_by_name && ['rejected', 'ready', 'pending', 'processing', 'failed'].includes(d.status)) {
+            statusExtra += `<div class="msg">审批人：${KB.escapeHtml(d.reviewed_by_name)}</div>`;
+          }
+          if (d.uploader_name) {
+            statusExtra += `<div class="msg">上传：${KB.escapeHtml(d.uploader_name)}</div>`;
+          }
+          return `
+          <tr>
+            <td>${d.id}</td>
+            <td>${KB.escapeHtml(d.title)}</td>
+            <td>${d.file_type || '-'}</td>
+            <td>${KB.escapeHtml(scope)}${deptName}</td>
+            <td>${KB.statusBadge(d.status, d.status_display)}${statusExtra}</td>
+            <td>${d.chunk_count}</td>
+            ${actionHtml}
+          </tr>`;
+        }).join('');
+      } catch (e) {
+        tbody.innerHTML = `<tr><td colspan="7">${KB.escapeHtml(e.message)}</td></tr>`;
+      }
+    }
+
+    document.getElementById('doc-tbody').addEventListener('click', async (e) => {
+      const delId = e.target.getAttribute('data-del');
+      const repId = e.target.getAttribute('data-reprocess');
+      const approveId = e.target.getAttribute('data-approve');
+      const rejectId = e.target.getAttribute('data-reject');
+      const msg = document.getElementById('doc-msg');
+      try {
+        if (approveId) {
+          if (!confirm('确认通过文档 #' + approveId + ' 并开始解析入库？')) return;
+          await KB.api('/api/documents/' + approveId + '/approve/', {
+            method: 'POST',
+            headers: KB.headersJson,
+            body: '{}',
+          });
+          KB.setMsg(msg, '已通过 #' + approveId + '，正在处理', 'ok');
+          await loadDocs();
+        }
+        if (rejectId) {
+          const reason = prompt('驳回原因（可选）', '');
+          if (reason === null) return;
+          await KB.api('/api/documents/' + rejectId + '/reject/', {
+            method: 'POST',
+            headers: KB.headersJson,
+            body: JSON.stringify({ reason: reason.trim() }),
+          });
+          KB.setMsg(msg, '已驳回 #' + rejectId, 'ok');
+          await loadDocs();
+        }
+        if (delId) {
+          if (!confirm('确认删除文档 #' + delId + '？')) return;
+          await KB.api('/api/documents/' + delId + '/', {
+            method: 'DELETE',
+            headers: KB.headersAuth,
+          });
+          KB.setMsg(msg, '已删除 #' + delId, 'ok');
+          await loadDocs();
+        }
+        if (repId) {
+          await KB.api('/api/documents/' + repId + '/reprocess/', {
+            method: 'POST',
+            headers: KB.headersJson,
+            body: '{}',
+          });
+          KB.setMsg(msg, '已重新处理 #' + repId, 'ok');
+          await loadDocs();
+        }
+      } catch (err) {
+        KB.setMsg(msg, err.message || '操作失败', 'err');
+      }
+    });
+
+    document.getElementById('refresh-docs').addEventListener('click', loadDocs);
+    document.getElementById('only-pending').addEventListener('change', loadDocs);
+    await loadDocs();
+  };
+</script>
+{% endblock %}

@@ -1,0 +1,120 @@
+{% extends "app_base.html" %}
+{% block title %}个人信息 · SmartKBQA{% endblock %}
+{% block page_id %}profile{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>个人信息</h1>
+  <p class="sub">当前登录账号的基本资料与权限概览。</p>
+  <dl class="meta" id="user-meta"><dt>加载中…</dt><dd></dd></dl>
+</section>
+
+<section class="card">
+  <h2>修改密码</h2>
+  <p class="sub">修改成功后将使用新令牌保持登录；请牢记新密码。</p>
+  <form id="password-form">
+    <div class="row">
+      <div class="field">
+        <label for="old-password">当前密码</label>
+        <input id="old-password" type="password" autocomplete="current-password" required />
+      </div>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label for="new-password">新密码</label>
+        <input id="new-password" type="password" autocomplete="new-password" minlength="8" required />
+      </div>
+      <div class="field">
+        <label for="new-password-confirm">确认新密码</label>
+        <input id="new-password-confirm" type="password" autocomplete="new-password" minlength="8" required />
+      </div>
+    </div>
+    <button class="primary" id="password-btn" type="submit">保存新密码</button>
+    <p id="password-msg" class="msg"></p>
+  </form>
+</section>
+
+<section class="card">
+  <h2>快捷入口</h2>
+  <div class="row">
+    <a class="btn" href="/qa/">去知识问答</a>
+    <a class="btn" href="/documents/">去文档管理</a>
+    <a class="btn" href="/upload/" id="link-upload" hidden>去上传文档</a>
+    <a class="btn" href="/staff/" id="link-staff" hidden>去员工管理</a>
+  </div>
+</section>
+{% endblock %}
+{% block extra_js %}
+<script>
+  window.onAppReady = async function (user) {
+    const dept = user.department
+      ? `${user.department.name} (${user.department.code})`
+      : '未分配';
+    const roleLabel = user.role_display || '-';
+    document.getElementById('user-meta').innerHTML = `
+      <dt>用户名</dt><dd>${KB.escapeHtml(user.username || '-')}</dd>
+      <dt>邮箱</dt><dd>${KB.escapeHtml(user.email || '-')}</dd>
+      <dt>姓名</dt><dd>${KB.escapeHtml([user.last_name, user.first_name].filter(Boolean).join('') || '-')}</dd>
+      <dt>部门</dt><dd>${KB.escapeHtml(dept)}</dd>
+      <dt>角色</dt><dd>${KB.escapeHtml(roleLabel)}</dd>
+      <dt>上传权限</dt><dd>${user.can_upload ? '可上传文档' : '仅检索问答'}</dd>
+      <dt>员工管理</dt><dd>${(user.can_manage_staff || user.is_admin) ? '可管理员工' : '无'}</dd>
+      <dt>账号状态</dt><dd>${user.is_active === false ? '禁用' : '启用'}</dd>
+      <dt>注册时间</dt><dd>${KB.escapeHtml(user.date_joined || '-')}</dd>
+    `;
+    const lu = document.getElementById('link-upload');
+    const ls = document.getElementById('link-staff');
+    if (lu) lu.hidden = !user.can_upload;
+    if (ls) ls.hidden = !(user.can_manage_staff || user.is_admin);
+
+    document.getElementById('password-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const msg = document.getElementById('password-msg');
+      const btn = document.getElementById('password-btn');
+      const oldPassword = document.getElementById('old-password').value;
+      const newPassword = document.getElementById('new-password').value;
+      const confirm = document.getElementById('new-password-confirm').value;
+      if (newPassword !== confirm) {
+        KB.setMsg(msg, '两次输入的新密码不一致', 'err');
+        return;
+      }
+      if (newPassword.length < 8) {
+        KB.setMsg(msg, '新密码至少 8 位', 'err');
+        return;
+      }
+      btn.disabled = true;
+      KB.setMsg(msg, '提交中…');
+      try {
+        const body = {
+          old_password: oldPassword,
+          new_password: newPassword,
+          new_password_confirm: confirm,
+        };
+        if (KB.refresh) body.refresh = KB.refresh;
+        const data = await KB.api('/api/auth/change-password/', {
+          method: 'POST',
+          headers: KB.headersJson,
+          body: JSON.stringify(body),
+        });
+        if (data.access) {
+          localStorage.setItem('access_token', data.access);
+          KB.access = data.access;
+          KB.headersAuth.Authorization = 'Bearer ' + data.access;
+          KB.headersJson.Authorization = 'Bearer ' + data.access;
+        }
+        if (data.refresh) {
+          localStorage.setItem('refresh_token', data.refresh);
+          KB.refresh = data.refresh;
+        }
+        document.getElementById('old-password').value = '';
+        document.getElementById('new-password').value = '';
+        document.getElementById('new-password-confirm').value = '';
+        KB.setMsg(msg, '密码已修改，新令牌已更新', 'ok');
+      } catch (err) {
+        KB.setMsg(msg, err.message || '修改失败', 'err');
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  };
+</script>
+{% endblock %}

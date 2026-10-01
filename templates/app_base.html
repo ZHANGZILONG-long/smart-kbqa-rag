@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}SmartKBQA{% endblock %}</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #111827;
+      --line: #1f2937;
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --primary: #3b82f6;
+      --danger: #f87171;
+      --ok: #34d399;
+      --input: #0b1220;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(1000px 500px at 0% 0%, #1e3a8a44, transparent 55%),
+        var(--bg);
+    }
+    header.app-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      padding: 12px 20px;
+      border-bottom: 1px solid var(--line);
+      background: #0b1220ee;
+      backdrop-filter: blur(8px);
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      flex-wrap: wrap;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      text-decoration: none;
+      color: var(--text);
+      white-space: nowrap;
+    }
+    .logo {
+      width: 32px; height: 32px; border-radius: 8px;
+      display: grid; place-items: center;
+      background: linear-gradient(135deg, #3b82f6, #06b6d4);
+      font-size: 12px;
+    }
+    nav.app-nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      flex: 1;
+      justify-content: center;
+    }
+    nav.app-nav a {
+      text-decoration: none;
+      color: var(--muted);
+      padding: 8px 14px;
+      border-radius: 999px;
+      font-size: 14px;
+      border: 1px solid transparent;
+    }
+    nav.app-nav a:hover {
+      color: #93c5fd;
+      background: #1e293b;
+    }
+    nav.app-nav a.active {
+      color: #fff;
+      background: linear-gradient(135deg, #3b82f6, #0ea5e9);
+      border-color: transparent;
+      font-weight: 600;
+    }
+    nav.app-nav a[hidden] { display: none !important; }
+    .header-right {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      white-space: nowrap;
+    }
+    button, .btn {
+      border: 1px solid var(--line);
+      background: transparent;
+      color: var(--text);
+      border-radius: 8px;
+      padding: 8px 14px;
+      cursor: pointer;
+      font: inherit;
+      text-decoration: none;
+      display: inline-block;
+    }
+    button:hover, .btn:hover { border-color: var(--primary); color: #93c5fd; }
+    button.primary, .btn.primary {
+      background: linear-gradient(135deg, #3b82f6, #0ea5e9);
+      border: 0;
+      color: #fff;
+      font-weight: 600;
+    }
+    button:disabled { opacity: .6; cursor: not-allowed; }
+    main {
+      max-width: 980px;
+      margin: 24px auto 48px;
+      padding: 0 20px;
+      display: grid;
+      gap: 20px;
+    }
+    .card {
+      background: color-mix(in srgb, var(--card) 92%, transparent);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 22px;
+    }
+    h1 { margin: 0 0 8px; font-size: 22px; }
+    h2 { margin: 0 0 14px; font-size: 16px; }
+    .sub { color: var(--muted); margin: 0 0 16px; font-size: 13px; }
+    .meta {
+      display: grid;
+      grid-template-columns: 100px 1fr;
+      gap: 8px 12px;
+      font-size: 14px;
+    }
+    .meta dt { color: var(--muted); }
+    .meta dd { margin: 0; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+    input[type="text"], input[type="email"], input[type="file"], select, textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      background: var(--input);
+      color: var(--text);
+      border-radius: 10px;
+      padding: 10px 12px;
+      font: inherit;
+    }
+    textarea { min-height: 90px; resize: vertical; }
+    .field { margin-bottom: 12px; flex: 1; min-width: 160px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); font-weight: 500; }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      border: 1px solid var(--line);
+    }
+    .badge.ready { color: var(--ok); border-color: #065f46; }
+    .badge.failed, .badge.rejected { color: var(--danger); border-color: #7f1d1d; }
+    .badge.processing, .badge.pending { color: #fbbf24; border-color: #78350f; }
+    .badge.pending_approval { color: #38bdf8; border-color: #0c4a6e; }
+    .ok-btn { color: var(--ok); border-color: #065f46; }
+    .msg { font-size: 13px; margin-top: 10px; color: var(--muted); }
+    .msg.err { color: var(--danger); }
+    .msg.ok { color: var(--ok); }
+    .answer {
+      white-space: pre-wrap;
+      line-height: 1.6;
+      background: var(--input);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 14px;
+      min-height: 80px;
+    }
+    .sources { margin-top: 12px; font-size: 12px; color: var(--muted); }
+    .sources li { margin-bottom: 8px; }
+    .danger { color: var(--danger); border-color: #7f1d1d; }
+    .page-empty {
+      text-align: center;
+      padding: 48px 20px;
+      color: var(--muted);
+    }
+  </style>
+  {% block extra_css %}{% endblock %}
+</head>
+<body data-page="{% block page_id %}{% endblock %}">
+  <header class="app-header">
+    <a class="brand" href="/qa/"><div class="logo">KB</div>SmartKBQA</a>
+    <nav class="app-nav" id="app-nav">
+      <a href="/qa/" data-nav="qa">知识问答</a>
+      <a href="/documents/" data-nav="documents">文档管理</a>
+      <a href="/upload/" data-nav="upload" id="nav-upload" hidden>上传文档</a>
+      <a href="/staff/" data-nav="staff" id="nav-staff" hidden>员工管理</a>
+      <a href="/profile/" data-nav="profile">个人信息</a>
+    </nav>
+    <div class="header-right">
+      <span id="who" class="sub" style="margin:0"></span>
+      <button id="logout-btn" type="button">退出</button>
+    </div>
+  </header>
+
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+
+  <script>
+    const access = localStorage.getItem('access_token');
+    const refresh = localStorage.getItem('refresh_token');
+    if (!access) window.location.replace('/login/');
+
+    const headersJson = {
+      'Authorization': 'Bearer ' + access,
+      'Content-Type': 'application/json',
+    };
+    const headersAuth = { 'Authorization': 'Bearer ' + access };
+
+    window.KB = {
+      access,
+      refresh,
+      headersJson,
+      headersAuth,
+      currentUser: null,
+      setMsg(el, text, type) {
+        if (!el) return;
+        el.textContent = text || '';
+        el.className = 'msg' + (type ? ' ' + type : '');
+      },
+      escapeHtml(s) {
+        return String(s || '')
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;')
+          .replaceAll('"', '&quot;');
+      },
+      async api(url, options = {}) {
+        const res = await fetch(url, options);
+        if (res.status === 401) {
+          localStorage.clear();
+          window.location.replace('/login/');
+          throw new Error('未登录或令牌失效');
+        }
+        let data = null;
+        const ct = res.headers.get('content-type') || '';
+        if (ct.includes('application/json')) {
+          data = await res.json();
+        } else if (res.status !== 204) {
+          data = await res.text();
+        }
+        if (!res.ok) {
+          let detail = res.statusText;
+          if (data) {
+            if (typeof data === 'string') detail = data;
+            else if (data.detail) detail = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail);
+            else detail = JSON.stringify(data);
+          }
+          throw new Error(detail);
+        }
+        return data;
+      },
+      statusBadge(status, label) {
+        const cls = String(status || '').replaceAll(' ', '_');
+        return `<span class="badge ${cls}">${label || status}</span>`;
+      },
+      applyNav(user) {
+        const page = document.body.getAttribute('data-page') || '';
+        document.querySelectorAll('#app-nav a[data-nav]').forEach(a => {
+          a.classList.toggle('active', a.getAttribute('data-nav') === page);
+        });
+        const navUpload = document.getElementById('nav-upload');
+        const navStaff = document.getElementById('nav-staff');
+        if (navUpload) navUpload.hidden = !(user && user.can_upload);
+        if (navStaff) navStaff.hidden = !(user && (user.can_manage_staff || user.is_admin));
+
+        const roleLabel = (user && user.role_display) || '';
+        const who = document.getElementById('who');
+        if (who && user) {
+          who.textContent = (user.username || '') + (roleLabel ? ' · ' + roleLabel : '');
+        }
+
+        // 无权限访问当前页时跳走
+        if (page === 'upload' && user && !user.can_upload) {
+          window.location.replace('/documents/');
+          return false;
+        }
+        if (page === 'staff' && user && !(user.can_manage_staff || user.is_admin)) {
+          window.location.replace('/profile/');
+          return false;
+        }
+        return true;
+      },
+      async loadMe() {
+        const user = await this.api('/api/auth/me/', { headers: headersAuth });
+        this.currentUser = user;
+        localStorage.setItem('user_info', JSON.stringify(user));
+        return user;
+      },
+      async logout() {
+        try {
+          if (refresh) {
+            await fetch('/api/auth/logout/', {
+              method: 'POST',
+              headers: headersJson,
+              body: JSON.stringify({ refresh }),
+            });
+          }
+        } catch (_) {}
+        localStorage.clear();
+        window.location.href = '/login/';
+      },
+    };
+
+    document.getElementById('logout-btn').addEventListener('click', () => KB.logout());
+
+    (async function boot() {
+      try {
+        const cached = localStorage.getItem('user_info');
+        if (cached) {
+          try {
+            KB.currentUser = JSON.parse(cached);
+            KB.applyNav(KB.currentUser);
+          } catch (_) {}
+        }
+        const user = await KB.loadMe();
+        if (!KB.applyNav(user)) return;
+        if (typeof window.onAppReady === 'function') {
+          await window.onAppReady(user);
+        }
+      } catch (err) {
+        const main = document.querySelector('main');
+        if (main) {
+          main.innerHTML = `<section class="card"><p class="msg err">${KB.escapeHtml(err.message)}</p></section>`;
+        }
+      }
+    })();
+  </script>
+  {% block extra_js %}{% endblock %}
+</body>
+</html>
