@@ -9,11 +9,8 @@ from django.conf import settings
 
 class HashEmbeddingFunction:
     """
-    本地确定性向量：不依赖外网，便于开发联调。
-    正式环境请配置 OpenAI 兼容的 embedding 接口。
-
-    需兼容 Chroma 1.x：查询时会调用 embed_query(input=...)，
-    写入时走 __call__(input=...)。
+    本地确定性向量：不依赖外网，仅作兜底联调。
+    正式检索请使用 sentence-transformers / openai。
     """
 
     def __init__(self, dim: int = 384):
@@ -31,7 +28,6 @@ class HashEmbeddingFunction:
         return [self._embed_one(text) for text in texts]
 
     def embed_query(self, input=None, **kwargs) -> list[list[float]]:
-        # Chroma 1.x: embed_query(input=[...]) -> Embeddings
         if input is None and 'input' in kwargs:
             input = kwargs['input']
         return self.__call__(input)
@@ -63,10 +59,25 @@ class HashEmbeddingFunction:
         return [v / norm for v in values]
 
 
+def _collection_name() -> str:
+    """
+    不同 embedding 方案使用不同 collection，避免维度/语义空间混用。
+    """
+    base = settings.CHROMA_COLLECTION
+    provider = (settings.EMBEDDING_PROVIDER or 'hash').lower()
+    if provider == 'sentence':
+        model = (settings.EMBEDDING_MODEL or 'BAAI/bge-small-zh-v1.5').replace('/', '_')
+        return f'{base}__sentence__{model}'
+    if provider == 'openai':
+        model = (settings.EMBEDDING_MODEL or 'text-embedding-3-small').replace('/', '_')
+        return f'{base}__openai__{model}'
+    return f'{base}__hash'
+
 
 @lru_cache(maxsize=1)
 def get_embedding_function():
     provider = (settings.EMBEDDING_PROVIDER or 'hash').lower()
+
     if provider == 'openai':
         from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
 
@@ -80,13 +91,21 @@ def get_embedding_function():
         if settings.EMBEDDING_BASE_URL:
             kwargs['api_base'] = settings.EMBEDDING_BASE_URL
         return OpenAIEmbeddingFunction(**kwargs)
+
+    if provider in {'sentence', 'local', 'bge'}:
+        from chromadb.utils.embedding_functions import (
+            SentenceTransformerEmbeddingFunction,
+        )
+
+        model = settings.EMBEDDING_MODEL or 'BAAI/bge-small-zh-v1.5'
+        return SentenceTransformerEmbeddingFunction(model_name=model)
+
     return HashEmbeddingFunction(dim=settings.EMBEDDING_DIM)
 
 
 def clear_vector_caches():
     get_embedding_function.cache_clear()
     get_chroma_client.cache_clear()
-
 
 
 @lru_cache(maxsize=1)
@@ -107,9 +126,13 @@ def get_chroma_client():
 def get_collection():
     client = get_chroma_client()
     return client.get_or_create_collection(
-        name=settings.CHROMA_COLLECTION,
+        name=_collection_name(),
         embedding_function=get_embedding_function(),
-        metadata={'hnsw:space': 'cosine'},
+        metadata={
+            'hnsw:space': 'cosine',
+            'embedding_provider': settings.EMBEDDING_PROVIDER,
+            'embedding_model': settings.EMBEDDING_MODEL or '',
+        },
     )
 
 
@@ -131,7 +154,6 @@ def delete_document_vectors(document_id: int) -> None:
     try:
         collection.delete(where={'document_id': document_id})
     except Exception:
-        # 集合为空或没有匹配项时忽略
         pass
 
 
@@ -160,7 +182,6 @@ def search_similar(
         distance = dists[i] if i < len(dists) else None
         score = None
         if distance is not None:
-            # cosine distance -> 相似度近似
             score = max(0.0, 1.0 - float(distance))
         items.append(
             {

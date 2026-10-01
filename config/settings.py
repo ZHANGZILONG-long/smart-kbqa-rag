@@ -242,9 +242,15 @@ DEEPSEEK_API_KEY = config('DEEPSEEK_API_KEY', default='')
 DEEPSEEK_BASE_URL = config('DEEPSEEK_BASE_URL', default='https://api.deepseek.com')
 LLM_MODEL = config('LLM_MODEL', default='deepseek-chat')
 
-# embedding: hash（本地联调）或 openai（OpenAI 兼容接口）
-EMBEDDING_PROVIDER = config('EMBEDDING_PROVIDER', default='hash')
-EMBEDDING_MODEL = config('EMBEDDING_MODEL', default='')
+# embedding:
+# - sentence: 本地中文语义模型（默认 BAAI/bge-small-zh-v1.5，推荐）
+# - openai: OpenAI 兼容 embedding 接口
+# - hash: 仅开发兜底，检索质量差
+EMBEDDING_PROVIDER = config('EMBEDDING_PROVIDER', default='sentence')
+EMBEDDING_MODEL = config(
+    'EMBEDDING_MODEL',
+    default='BAAI/bge-small-zh-v1.5',
+)
 EMBEDDING_API_KEY = config('EMBEDDING_API_KEY', default='')
 EMBEDDING_BASE_URL = config('EMBEDDING_BASE_URL', default='')
 EMBEDDING_DIM = config('EMBEDDING_DIM', default=384, cast=int)
