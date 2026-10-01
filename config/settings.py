@@ -10,30 +10,33 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/4.2/ref/settings/
 """
 
+import sys
+from datetime import timedelta
 from pathlib import Path
 
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
+from decouple import Csv, config
+
+# 项目根目录，也就是 manage.py 所在的 smart_kbqa/
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# Put the `apps` directory on the import path so applications placed inside it
-# can be referenced by their own name once they are created.
-import sys
+# 把 apps 目录加入模块搜索路径，这样 apps/ 下的应用可以直接用应用名导入。
 sys.path.insert(0, str(BASE_DIR / 'apps'))
 
 
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
+# ---------------------------------------------------------------------------
+# 基础配置：全部从项目根目录的 .env 读取，字段模板见 .env.example
+# ---------------------------------------------------------------------------
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-v7(tqf8ch*guj8vs-#croa!v)b@v7jf6ueqgshu%xclb4z_20-'
+SECRET_KEY = config('DJANGO_SECRET_KEY')
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = config('DEBUG', default=False, cast=bool)
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='127.0.0.1,localhost', cast=Csv())
 
 
-# Application definition
+# ---------------------------------------------------------------------------
+# 应用与中间件
+# ---------------------------------------------------------------------------
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -42,10 +45,25 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    # 第三方
+    'rest_framework',
+    'rest_framework_simplejwt',
+    'rest_framework_simplejwt.token_blacklist',
+    'corsheaders',
+    'django_celery_beat',
+    # 业务应用
+    'accounts',
+    'documents',
+    'qa',
 ]
+
+# 使用带部门字段的自定义用户模型
+AUTH_USER_MODEL = 'accounts.User'
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    # CorsMiddleware 必须排在 CommonMiddleware 之前，否则跨域响应头会丢失。
+    'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -59,7 +77,7 @@ ROOT_URLCONF = 'config.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -75,19 +93,28 @@ TEMPLATES = [
 WSGI_APPLICATION = 'config.wsgi.application'
 
 
-# Database
-# https://docs.djangoproject.com/en/4.2/ref/settings/#databases
+# ---------------------------------------------------------------------------
+# 数据库：MySQL 8.0
+# ---------------------------------------------------------------------------
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': config('DB_NAME', default='smartkbqa'),
+        'USER': config('DB_USER', default='root'),
+        'PASSWORD': config('DB_PASSWORD', default=''),
+        'HOST': config('DB_HOST', default='127.0.0.1'),
+        'PORT': config('DB_PORT', default='3306'),
+        'OPTIONS': {
+            'charset': 'utf8mb4',
+        },
     }
 }
 
 
-# Password validation
-# https://docs.djangoproject.com/en/4.2/ref/settings/#auth-password-validators
+# ---------------------------------------------------------------------------
+# 密码校验
+# ---------------------------------------------------------------------------
 
 AUTH_PASSWORD_VALIDATORS = [
     {
@@ -105,24 +132,125 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 
-# Internationalization
-# https://docs.djangoproject.com/en/4.2/topics/i18n/
+# ---------------------------------------------------------------------------
+# 国际化
+# ---------------------------------------------------------------------------
 
-LANGUAGE_CODE = 'en-us'
+LANGUAGE_CODE = 'zh-hans'
 
-TIME_ZONE = 'UTC'
+TIME_ZONE = 'Asia/Shanghai'
 
 USE_I18N = True
 
 USE_TZ = True
 
 
-# Static files (CSS, JavaScript, Images)
-# https://docs.djangoproject.com/en/4.2/howto/static-files/
+# ---------------------------------------------------------------------------
+# 静态文件与用户上传的文档
+# ---------------------------------------------------------------------------
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 
-# Default primary key field type
-# https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
+MEDIA_URL = 'media/'
+MEDIA_ROOT = BASE_DIR / 'media'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+
+# ---------------------------------------------------------------------------
+# DRF + JWT
+# ---------------------------------------------------------------------------
+
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'rest_framework.authentication.SessionAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 20,
+}
+
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(
+        minutes=config('JWT_ACCESS_MINUTES', default=60, cast=int)
+    ),
+    'REFRESH_TOKEN_LIFETIME': timedelta(
+        days=config('JWT_REFRESH_DAYS', default=7, cast=int)
+    ),
+    'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': True,
+    'UPDATE_LAST_LOGIN': True,
+    'AUTH_HEADER_TYPES': ('Bearer',),
+}
+
+
+# ---------------------------------------------------------------------------
+# 跨域
+# ---------------------------------------------------------------------------
+
+CORS_ALLOWED_ORIGINS = config(
+    'CORS_ALLOWED_ORIGINS',
+    default='http://127.0.0.1:3000,http://localhost:3000',
+    cast=Csv(),
+)
+
+
+# ---------------------------------------------------------------------------
+# Redis 与 Celery
+# ---------------------------------------------------------------------------
+
+REDIS_URL = config('REDIS_URL', default='redis://127.0.0.1:6379/0')
+
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+        'LOCATION': REDIS_URL,
+    }
+}
+
+CELERY_BROKER_URL = config('CELERY_BROKER_URL', default='redis://127.0.0.1:6379/1')
+CELERY_RESULT_BACKEND = config('CELERY_RESULT_BACKEND', default='redis://127.0.0.1:6379/2')
+CELERY_TIMEZONE = TIME_ZONE
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_TIME_LIMIT = 30 * 60
+CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
+# 本地未起 worker 时默认同步执行任务，避免文档一直停在 pending
+CELERY_TASK_ALWAYS_EAGER = config(
+    'CELERY_TASK_ALWAYS_EAGER',
+    default=DEBUG,
+    cast=bool,
+)
+CELERY_TASK_EAGER_PROPAGATES = True
+
+
+# ---------------------------------------------------------------------------
+# 向量库与模型服务
+# ---------------------------------------------------------------------------
+
+# http: 连接独立 Chroma 服务；persistent: 本地目录（当前默认，便于无 Docker 开发）
+CHROMA_MODE = config('CHROMA_MODE', default='persistent')
+CHROMA_HOST = config('CHROMA_HOST', default='127.0.0.1')
+CHROMA_PORT = config('CHROMA_PORT', default=8001, cast=int)
+CHROMA_PERSIST_DIR = BASE_DIR / config('CHROMA_PERSIST_DIR', default='data/chroma')
+CHROMA_COLLECTION = config('CHROMA_COLLECTION', default='smart_kbqa')
+
+DEEPSEEK_API_KEY = config('DEEPSEEK_API_KEY', default='')
+DEEPSEEK_BASE_URL = config('DEEPSEEK_BASE_URL', default='https://api.deepseek.com')
+LLM_MODEL = config('LLM_MODEL', default='deepseek-chat')
+
+# embedding: hash（本地联调）或 openai（OpenAI 兼容接口）
+EMBEDDING_PROVIDER = config('EMBEDDING_PROVIDER', default='hash')
+EMBEDDING_MODEL = config('EMBEDDING_MODEL', default='')
+EMBEDDING_API_KEY = config('EMBEDDING_API_KEY', default='')
+EMBEDDING_BASE_URL = config('EMBEDDING_BASE_URL', default='')
+EMBEDDING_DIM = config('EMBEDDING_DIM', default=384, cast=int)
+
+CHUNK_SIZE = config('CHUNK_SIZE', default=800, cast=int)
+CHUNK_OVERLAP = config('CHUNK_OVERLAP', default=120, cast=int)
+
+FILE_UPLOAD_MAX_MEMORY_SIZE = 20 * 1024 * 1024
+DATA_UPLOAD_MAX_MEMORY_SIZE = 20 * 1024 * 1024

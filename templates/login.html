@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>登录 · SmartKBQA</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #111827;
+      --line: #1f2937;
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --primary: #3b82f6;
+      --primary-hover: #2563eb;
+      --danger: #f87171;
+      --ok: #34d399;
+      --input: #0b1220;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(1200px 600px at 10% -10%, #1e3a8a55, transparent 60%),
+        radial-gradient(900px 500px at 100% 0%, #0ea5e955, transparent 50%),
+        var(--bg);
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+    .card {
+      width: 100%;
+      max-width: 400px;
+      background: color-mix(in srgb, var(--card) 92%, transparent);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 32px 28px;
+      box-shadow: 0 20px 50px rgba(0,0,0,.35);
+      backdrop-filter: blur(8px);
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+    .logo {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      display: grid;
+      place-items: center;
+      background: linear-gradient(135deg, #3b82f6, #06b6d4);
+      font-weight: 700;
+      font-size: 14px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 22px;
+      letter-spacing: .2px;
+    }
+    .sub {
+      margin: 0 0 24px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    label {
+      display: block;
+      font-size: 13px;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .field { margin-bottom: 16px; }
+    input {
+      width: 100%;
+      border: 1px solid var(--line);
+      background: var(--input);
+      color: var(--text);
+      border-radius: 10px;
+      padding: 12px 14px;
+      font-size: 15px;
+      outline: none;
+      transition: border-color .15s, box-shadow .15s;
+    }
+    input:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px #3b82f633;
+    }
+    button {
+      width: 100%;
+      border: 0;
+      border-radius: 10px;
+      padding: 12px 16px;
+      font-size: 15px;
+      font-weight: 600;
+      color: white;
+      background: linear-gradient(135deg, var(--primary), #0ea5e9);
+      cursor: pointer;
+      transition: transform .05s, filter .15s, opacity .15s;
+    }
+    button:hover { filter: brightness(1.05); }
+    button:active { transform: translateY(1px); }
+    button:disabled { opacity: .65; cursor: not-allowed; }
+    .msg {
+      min-height: 20px;
+      margin: 12px 0 0;
+      font-size: 13px;
+      color: var(--danger);
+    }
+    .msg.ok { color: var(--ok); }
+    .hint {
+      margin-top: 20px;
+      padding-top: 16px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+    code {
+      background: #0b1220;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 1px 6px;
+      color: #93c5fd;
+    }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="brand">
+      <div class="logo">KB</div>
+      <h1>SmartKBQA</h1>
+    </div>
+    <p class="sub">企业内部知识库问答系统 · 请使用账号登录</p>
+
+    <form id="login-form" autocomplete="on">
+      <div class="field">
+        <label for="username">用户名</label>
+        <input id="username" name="username" type="text" required autofocus placeholder="例如 zhangsan" />
+      </div>
+      <div class="field">
+        <label for="password">密码</label>
+        <input id="password" name="password" type="password" required placeholder="请输入密码" />
+      </div>
+      <button id="submit-btn" type="submit">登录</button>
+      <p id="msg" class="msg" aria-live="polite"></p>
+    </form>
+
+    <div class="hint">
+      开发测试账号：<br />
+      普通用户 <code>zhangsan</code> / <code>User@123456</code><br />
+      管理员 <code>admin</code> / <code>Admin@123456</code>
+    </div>
+  </main>
+
+  <script>
+    const form = document.getElementById('login-form');
+    const msg = document.getElementById('msg');
+    const btn = document.getElementById('submit-btn');
+
+    // 已登录则直接进首页
+    if (localStorage.getItem('access_token')) {
+      window.location.replace('/home/');
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      msg.textContent = '';
+      msg.classList.remove('ok');
+      btn.disabled = true;
+      btn.textContent = '登录中…';
+
+      const username = document.getElementById('username').value.trim();
+      const password = document.getElementById('password').value;
+
+      try {
+        const res = await fetch('/api/auth/login/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password }),
+        });
+        const data = await res.json().catch(() => ({}));
+
+        if (!res.ok) {
+          const detail = data.detail
+            || (data.non_field_errors && data.non_field_errors[0])
+            || '用户名或密码错误';
+          throw new Error(detail);
+        }
+
+        localStorage.setItem('access_token', data.access);
+        localStorage.setItem('refresh_token', data.refresh);
+        if (data.user) {
+          localStorage.setItem('user_info', JSON.stringify(data.user));
+        }
+
+        msg.classList.add('ok');
+        msg.textContent = '登录成功，正在跳转…';
+        window.location.href = '/home/';
+      } catch (err) {
+        msg.textContent = err.message || '登录失败，请稍后重试';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '登录';
+      }
+    });
+  </script>
+</body>
+</html>

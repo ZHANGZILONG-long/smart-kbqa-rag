@@ -1,0 +1,12 @@
+from django.conf import settings
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+
+def split_text(text: str) -> list[str]:
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=settings.CHUNK_SIZE,
+        chunk_overlap=settings.CHUNK_OVERLAP,
+        separators=['\n\n', '\n', '。', '！', '？', '；', ' ', ''],
+    )
+    chunks = [c.strip() for c in splitter.split_text(text) if c and c.strip()]
+    return chunks
