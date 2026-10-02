@@ -10,6 +10,17 @@ class QuestionSession(models.Model):
         verbose_name='用户',
     )
     title = models.CharField('会话标题', max_length=200, blank=True)
+    summary = models.TextField(
+        '历史摘要',
+        blank=True,
+        default='',
+        help_text='被挤出滑动窗口的旧对话的滚动摘要，作为会话的长期记忆。',
+    )
+    summarized_message_count = models.PositiveIntegerField(
+        '已摘要消息数',
+        default=0,
+        help_text='按消息顺序，已并入 summary 的消息条数，避免重复摘要。',
+    )
     created_at = models.DateTimeField('创建时间', auto_now_add=True)
     updated_at = models.DateTimeField('更新时间', auto_now=True)
 
@@ -20,6 +31,20 @@ class QuestionSession(models.Model):
 
     def __str__(self):
         return self.title or f'session-{self.pk}'
+
+    @property
+    def memory_enabled(self) -> bool:
+        return bool(getattr(settings, 'MEMORY_ENABLED', True))
+
+    def reset_memory(self, *, purge_messages: bool = False) -> int:
+        """清空长期记忆；purge_messages=True 时同时删除全部消息。返回删除的消息数。"""
+        deleted = 0
+        if purge_messages:
+            deleted, _ = self.messages.all().delete()
+        self.summary = ''
+        self.summarized_message_count = 0
+        self.save(update_fields=['summary', 'summarized_message_count'])
+        return deleted
 
 
 class QAMessage(models.Model):

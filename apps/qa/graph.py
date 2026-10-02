@@ -4,6 +4,10 @@ LangGraph 多步知识库问答。
 流程：
   rewrite  →  retrieve  →  grade  ─┬─(不足且未超限)→ expand_retrieve → grade ...
                                    └─(足够/放弃)──→ generate → END
+
+多轮记忆：``run_qa`` 可接收 :class:`qa.memory.MemorySnapshot`，其中
+``history`` / ``history_summary`` 会进入 rewrite（指代消解）与 generate
+（对话上下文），让追问、省略与代词指代都能回答正确。
 """
 
 from __future__ import annotations
@@ -23,6 +27,8 @@ class QAState(TypedDict, total=False):
     user_id: int
     is_super_admin: bool
     department_id: int | None
+    history: list[dict]
+    history_summary: str
     hits: list[dict]
     grade: str
     grade_reason: str
@@ -134,26 +140,93 @@ def _access_where(state: QAState) -> dict | None:
     return {'visibility': {'$eq': 'public'}}
 
 
+def _history_lines(
+    state: QAState, max_messages: int = 6, max_chars: int = 200
+) -> list[str]:
+    """把会话记忆渲染成提示词里的对话历史行。"""
+    lines: list[str] = []
+    summary = (state.get('history_summary') or '').strip()
+    if summary:
+        lines.append(f'【更早对话摘要】{summary}')
+    for msg in list(state.get('history') or [])[-max_messages:]:
+        label = '用户' if msg.get('role') == 'user' else '助手'
+        content = re.sub(r'\s+', ' ', (msg.get('content') or '')).strip()
+        if content:
+            lines.append(f'{label}：{content[:max_chars]}')
+    return lines
+
+
+def _last_user_question(state: QAState) -> str:
+    for msg in reversed(list(state.get('history') or [])):
+        if msg.get('role') == 'user':
+            return re.sub(r'\s+', ' ', (msg.get('content') or '')).strip()
+    return ''
+
+
+def _memory_messages(state: QAState) -> list[dict]:
+    """把记忆转成 OpenAI 风格消息，插在 system 之后、当前问题之前。"""
+    messages: list[dict] = []
+    summary = (state.get('history_summary') or '').strip()
+    if summary:
+        messages.append(
+            {'role': 'system', 'content': f'更早对话的摘要：{summary}'}
+        )
+    for msg in list(state.get('history') or []):
+        role = msg.get('role')
+        if role not in ('user', 'assistant'):
+            continue
+        content = (msg.get('content') or '').strip()
+        if content:
+            messages.append({'role': role, 'content': content})
+    return messages
+
+
 def rewrite_node(state: QAState) -> dict:
-    """把口语问题改写成更利于检索的查询。"""
+    """把口语问题改写成更利于检索的查询；多轮时先做指代消解。"""
     question = (state.get('question') or '').strip()
     llm = get_chat_llm(temperature=0)
     search_query = question
     detail = '使用原问题作为检索词'
 
+    use_history = bool(
+        getattr(settings, 'MEMORY_HISTORY_IN_REWRITE', True)
+        and (state.get('history') or state.get('history_summary'))
+    )
+    history_block = ''
+    if use_history:
+        lines = _history_lines(state)
+        if lines:
+            history_block = '对话历史：\n' + '\n'.join(lines) + '\n\n'
+
     if llm is not None and question:
+        history_hint = (
+            '用户问题可能是依赖上下文的追问（如"它""这个制度""那上面说的"），'
+            '请结合对话历史补全指代，输出能独立成立的中文查询。'
+            if history_block
+            else ''
+        )
         prompt = (
             '你是检索查询改写助手。把用户问题改写成适合企业知识库向量检索的简短中文查询。'
-            '保留关键实体、制度名、数字；不要回答问题；只输出查询文本本身。\n'
-            f'用户问题：{question}'
+            f'{history_hint}保留关键实体、制度名、数字；不要回答问题；只输出查询文本本身。\n'
+            f'{history_block}用户问题：{question}'
         )
         try:
             rewritten = _llm_text(llm.invoke(prompt)).strip().strip('"\'')
             if rewritten:
                 search_query = rewritten[:300]
-                detail = 'LLM 改写检索词'
+                detail = (
+                    'LLM 结合对话历史改写检索词（指代消解）'
+                    if history_block
+                    else 'LLM 改写检索词'
+                )
         except Exception as exc:
             detail = f'LLM 改写失败，回退原问题：{exc}'
+    elif history_block:
+        # 无 LLM 时的兜底：把上一轮问题拼进检索词，保证追问也能召回
+        prev = _last_user_question(state)
+        if prev:
+            search_query = f'{prev} {question}'[:300]
+            detail = '无 LLM，拼接上一轮问题作为检索词'
 
     return {
         'search_query': search_query,
@@ -165,6 +238,7 @@ def rewrite_node(state: QAState) -> dict:
                 'node': 'rewrite',
                 'detail': detail,
                 'search_query': search_query,
+                'history_used': bool(history_block),
             },
         ),
     }
@@ -357,24 +431,28 @@ def generate_node(state: QAState) -> dict:
         grade_note = (
             '注意：检索评审认为资料可能不完整；若无法从资料确认，请明确说明资料不足。\n'
         )
-    system = (
-        '你是企业内部知识库助手。请仅依据给定资料回答用户问题。'
+    memory_messages = _memory_messages(state)
+    system = '你是企业内部知识库助手。请仅依据给定资料回答用户问题。'
+    if memory_messages:
+        system += (
+            '用户可能在多轮追问，请结合对话历史理解其意图与指代；'
+            '但事实依据只能来自本次给定的资料，历史回答不构成依据。'
+        )
+    system += (
         '若资料不足，请明确说明不知道，不要编造。'
         '回答使用简体中文，必要时引用资料编号如 [1]。'
     )
     user_prompt = (
         f'{grade_note}资料：\n{context}\n\n用户问题：{question}\n\n请给出回答：'
     )
+    messages = [{'role': 'system', 'content': system}]
+    messages.extend(memory_messages)
+    messages.append({'role': 'user', 'content': user_prompt})
     try:
-        answer = _llm_text(
-            llm.invoke(
-                [
-                    {'role': 'system', 'content': system},
-                    {'role': 'user', 'content': user_prompt},
-                ]
-            )
-        ).strip()
+        answer = _llm_text(llm.invoke(messages)).strip()
         detail = 'DeepSeek 生成回答'
+        if memory_messages:
+            detail += f'（携带 {len(memory_messages)} 条记忆上下文）'
     except Exception as exc:
         answer = f'生成回答失败：{exc}'
         detail = 'LLM 调用失败'
@@ -384,7 +462,11 @@ def generate_node(state: QAState) -> dict:
         'sources': sources,
         'steps': _append_step(
             state.get('steps'),
-            {'node': 'generate', 'detail': detail},
+            {
+                'node': 'generate',
+                'detail': detail,
+                'memory_messages': len(memory_messages),
+            },
         ),
     }
 
@@ -423,15 +505,28 @@ def get_qa_graph():
     return _QA_GRAPH
 
 
-def run_qa(user, question: str, top_k: int = 5) -> dict:
-    """对外入口：执行 LangGraph 多步问答。"""
+def run_qa(user, question: str, top_k: int = 5, memory=None) -> dict:
+    """对外入口：执行 LangGraph 多步问答。
+
+    ``memory`` 为 :class:`qa.memory.MemorySnapshot`，提供多轮会话的短期历史与
+    长期摘要；为空时退化为单轮问答。
+    """
     graph = get_qa_graph()
+    history: list[dict] = []
+    history_summary = ''
+    memory_enabled = bool(memory is not None and getattr(memory, 'enabled', False))
+    if memory_enabled:
+        history = [dict(item) for item in (getattr(memory, 'history', ()) or ())]
+        history_summary = (getattr(memory, 'summary', '') or '').strip()
+
     initial: QAState = {
         'question': (question or '').strip(),
         'top_k': int(top_k or 5),
         'user_id': getattr(user, 'id', 0) or 0,
         'is_super_admin': bool(getattr(user, 'is_super_admin', False)),
         'department_id': getattr(user, 'department_id', None),
+        'history': history,
+        'history_summary': history_summary,
         'hits': [],
         'attempt': 0,
         'max_attempts': 2,
@@ -451,4 +546,5 @@ def run_qa(user, question: str, top_k: int = 5) -> dict:
         'grade_reason': final.get('grade_reason') or '',
         'steps': list(final.get('steps') or []),
         'engine': 'langgraph',
+        'memory_used': bool(history or history_summary),
     }

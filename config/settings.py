@@ -147,6 +147,17 @@ REST_FRAMEWORK = {
     },
 }
 
+if 'test' in sys.argv:
+    # 测试套件在同一个进程里共享 LocMem 缓存，反复登录会让 20/min 的登录限流
+    # 跨用例累积并偶发 429。这里放宽上限（真实环境仍按 .env 的速率生效）。
+    REST_FRAMEWORK['DEFAULT_THROTTLE_RATES'] = {
+        'anon': '10000/min',
+        'user': '10000/min',
+        'login': '10000/min',
+        'ask': '10000/min',
+        'upload': '10000/min',
+    }
+
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(
         minutes=config('JWT_ACCESS_MINUTES', default=60, cast=int)
@@ -220,6 +231,23 @@ EMBEDDING_DIM = config('EMBEDDING_DIM', default=384, cast=int)
 
 CHUNK_SIZE = config('CHUNK_SIZE', default=800, cast=int)
 CHUNK_OVERLAP = config('CHUNK_OVERLAP', default=120, cast=int)
+
+# ---------------------------------------------------------------------------
+# 多轮会话的记忆上下文管理
+# MEMORY_WINDOW_TURNS     参与 prompt 的最近轮数（1 轮 = 用户问 + 助手答）
+# MEMORY_MAX_HISTORY_CHARS 短期内历史消息进入 prompt 的字符预算
+# MEMORY_MAX_MESSAGE_CHARS 单条历史消息超过该长度即截断，防止一条长回答挤满预算
+# MEMORY_SUMMARY_MAX_CHARS 长期记忆（滚动摘要）的字符上限
+# ---------------------------------------------------------------------------
+MEMORY_ENABLED = config('MEMORY_ENABLED', default=True, cast=bool)
+MEMORY_WINDOW_TURNS = config('MEMORY_WINDOW_TURNS', default=6, cast=int)
+MEMORY_MAX_HISTORY_CHARS = config('MEMORY_MAX_HISTORY_CHARS', default=4000, cast=int)
+MEMORY_MAX_MESSAGE_CHARS = config('MEMORY_MAX_MESSAGE_CHARS', default=800, cast=int)
+MEMORY_SUMMARY_ENABLED = config('MEMORY_SUMMARY_ENABLED', default=True, cast=bool)
+MEMORY_SUMMARY_MAX_CHARS = config('MEMORY_SUMMARY_MAX_CHARS', default=1200, cast=int)
+MEMORY_HISTORY_IN_REWRITE = config(
+    'MEMORY_HISTORY_IN_REWRITE', default=True, cast=bool
+)
 
 FILE_UPLOAD_MAX_MEMORY_SIZE = 20 * 1024 * 1024
 DATA_UPLOAD_MAX_MEMORY_SIZE = 20 * 1024 * 1024

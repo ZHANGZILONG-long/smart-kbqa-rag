@@ -12,9 +12,11 @@ from rest_framework.views import APIView
 
 from common.audit import write_audit
 from common.models import AuditLog
+from qa.memory import build_memory
 from qa.models import QAMessage, QuestionSession
 from qa.serializers import AskSerializer, QuestionSessionSerializer
 from qa.services import run_qa
+from qa.tasks import refresh_session_summary
 
 logger = logging.getLogger('smartkbqa.qa')
 
@@ -56,10 +58,19 @@ def _persist_qa(session, question, result):
     return assistant
 
 
+def _schedule_summary(session_id):
+    """回答落库后异步滚动更新会话记忆摘要；失败只记日志，不影响用户请求。"""
+    try:
+        refresh_session_summary.delay(session_id)
+    except Exception:
+        logger.exception('schedule memory summary failed session=%s', session_id)
+
+
 class AskView(APIView):
     """
     POST /api/qa/ask/
-    body: {"question": "...", "session_id": null, "top_k": 5, "stream": false}
+    body: {"question": "...", "session_id": null, "top_k": 5, "stream": false,
+           "use_memory": true}
     stream=true 时返回 text/event-stream（SSE）。
     """
 
@@ -73,6 +84,7 @@ class AskView(APIView):
         question = serializer.validated_data['question'].strip()
         top_k = serializer.validated_data.get('top_k', 5)
         session_id = serializer.validated_data.get('session_id')
+        use_memory = serializer.validated_data.get('use_memory', True)
         stream = bool(
             request.data.get('stream')
             or request.query_params.get('stream') in ('1', 'true', 'yes')
@@ -82,13 +94,20 @@ class AskView(APIView):
         if err:
             return err
 
+        # 必须在写入本轮消息之前构建，历史里才不会混入当前问题
+        memory = build_memory(session, enabled=use_memory)
+
         if stream:
-            return self._stream_response(request, session, question, top_k)
+            return self._stream_response(
+                request, session, question, top_k, memory
+            )
 
         t0 = time.perf_counter()
-        result = run_qa(request.user, question, top_k=top_k)
+        result = run_qa(request.user, question, top_k=top_k, memory=memory)
         assistant = _persist_qa(session, question, result)
+        _schedule_summary(session.id)
         elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
+        memory_info = memory.as_dict(result.get('search_query'))
 
         write_audit(
             request=request,
@@ -101,6 +120,7 @@ class AskView(APIView):
                 'hit_count': result.get('hit_count'),
                 'elapsed_ms': elapsed_ms,
                 'stream': False,
+                'memory': memory_info,
             },
             status_code=200,
         )
@@ -118,11 +138,12 @@ class AskView(APIView):
                 'grade': result.get('grade'),
                 'grade_reason': result.get('grade_reason'),
                 'steps': result.get('steps') or [],
+                'memory': memory_info,
                 'elapsed_ms': elapsed_ms,
             }
         )
 
-    def _stream_response(self, request, session, question, top_k):
+    def _stream_response(self, request, session, question, top_k, memory):
         user = request.user
 
         def event_stream():
@@ -132,7 +153,7 @@ class AskView(APIView):
             yield emit('status', {'phase': 'running', 'session_id': session.id})
             t0 = time.perf_counter()
             try:
-                result = run_qa(user, question, top_k=top_k)
+                result = run_qa(user, question, top_k=top_k, memory=memory)
             except Exception as exc:
                 logger.exception('stream qa failed')
                 yield emit('error', {'detail': str(exc)[:500]})
@@ -145,6 +166,7 @@ class AskView(APIView):
                 yield emit('token', {'text': answer[i : i + chunk_size]})
 
             assistant = _persist_qa(session, question, result)
+            _schedule_summary(session.id)
             elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
             payload = {
                 'session_id': session.id,
@@ -158,6 +180,7 @@ class AskView(APIView):
                 'grade': result.get('grade'),
                 'grade_reason': result.get('grade_reason'),
                 'steps': result.get('steps') or [],
+                'memory': memory.as_dict(result.get('search_query')),
                 'elapsed_ms': elapsed_ms,
             }
             write_audit(
@@ -171,6 +194,7 @@ class AskView(APIView):
                     'hit_count': result.get('hit_count'),
                     'elapsed_ms': elapsed_ms,
                     'stream': True,
+                    'memory': payload['memory'],
                 },
                 status_code=200,
             )
@@ -226,3 +250,62 @@ class SessionDetailView(APIView):
             )
         session.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class SessionMemoryView(APIView):
+    """
+    GET    /api/qa/sessions/<pk>/memory/  查看会话记忆（摘要 + 窗口统计）
+    DELETE /api/qa/sessions/<pk>/memory/  清空记忆；?purge_messages=1 连消息一起删
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def _get_session(self, request, pk):
+        return QuestionSession.objects.filter(pk=pk, user=request.user).first()
+
+    def get(self, request, pk):
+        session = self._get_session(request, pk)
+        if not session:
+            return Response(
+                {'detail': '会话不存在'}, status=status.HTTP_404_NOT_FOUND
+            )
+        snapshot = build_memory(session)
+        data = snapshot.as_dict()
+        data.update(
+            {
+                'session_id': session.id,
+                'title': session.title,
+                'summary': session.summary or '',
+                'summarized_message_count': session.summarized_message_count or 0,
+                'message_count': session.messages.count(),
+                'updated_at': session.updated_at,
+            }
+        )
+        return Response(data)
+
+    def delete(self, request, pk):
+        session = self._get_session(request, pk)
+        if not session:
+            return Response(
+                {'detail': '会话不存在'}, status=status.HTTP_404_NOT_FOUND
+            )
+        purge = request.query_params.get('purge_messages') in ('1', 'true', 'yes')
+        with transaction.atomic():
+            deleted = session.reset_memory(purge_messages=purge)
+        write_audit(
+            request=request,
+            user=request.user,
+            action=AuditLog.Action.MEMORY_RESET,
+            object_type='session',
+            object_id=session.id,
+            detail={'purge_messages': purge, 'deleted_messages': deleted},
+            status_code=200,
+        )
+        return Response(
+            {
+                'session_id': session.id,
+                'summary': '',
+                'summarized_message_count': 0,
+                'purged_messages': deleted if purge else 0,
+            }
+        )

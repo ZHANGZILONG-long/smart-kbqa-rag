@@ -7,6 +7,8 @@ class AskSerializer(serializers.Serializer):
     question = serializers.CharField(max_length=2000)
     session_id = serializers.IntegerField(required=False, allow_null=True)
     top_k = serializers.IntegerField(required=False, min_value=1, max_value=10, default=5)
+    # 关闭后本次提问不携带会话历史，便于对照排查"记忆是否影响了回答"
+    use_memory = serializers.BooleanField(required=False, default=True)
 
 
 class QAMessageSerializer(serializers.ModelSerializer):
@@ -21,5 +23,13 @@ class QuestionSessionSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = QuestionSession
-        fields = ('id', 'title', 'created_at', 'updated_at', 'messages')
+        fields = (
+            'id',
+            'title',
+            'summary',
+            'summarized_message_count',
+            'created_at',
+            'updated_at',
+            'messages',
+        )
         read_only_fields = fields

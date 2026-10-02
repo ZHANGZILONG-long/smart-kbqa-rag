@@ -16,6 +16,7 @@ class AuditLog(models.Model):
         DELETE_DOC = 'delete_doc', '删除文档'
         REPROCESS_DOC = 'reprocess_doc', '重处理文档'
         ASK = 'ask', '知识问答'
+        MEMORY_RESET = 'memory_reset', '重置会话记忆'
         STAFF_UPDATE = 'staff_update', '更新员工'
         OTHER = 'other', '其他'
 

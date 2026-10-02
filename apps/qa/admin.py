@@ -11,6 +11,14 @@ class QAMessageInline(admin.TabularInline):
 
 @admin.register(QuestionSession)
 class QuestionSessionAdmin(admin.ModelAdmin):
-    list_display = ('id', 'user', 'title', 'created_at', 'updated_at')
-    search_fields = ('title', 'user__username')
+    list_display = (
+        'id',
+        'user',
+        'title',
+        'summarized_message_count',
+        'created_at',
+        'updated_at',
+    )
+    search_fields = ('title', 'user__username', 'summary')
+    readonly_fields = ('summary', 'summarized_message_count')
     inlines = [QAMessageInline]

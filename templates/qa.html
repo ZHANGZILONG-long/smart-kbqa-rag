@@ -32,12 +32,17 @@
       <button type="button" id="new-session-btn" style="padding:4px 10px;font-size:12px">新会话</button>
     </div>
     <div id="session-list"><p class="sub">加载中…</p></div>
+    <button type="button" id="clear-memory-btn"
+            style="margin-top:10px;padding:5px 10px;font-size:12px;width:100%">
+      清空当前会话记忆
+    </button>
   </section>
 
   <section class="card">
     <h1>知识库问答</h1>
     <p class="sub" id="qa-hint">按权限检索；支持流式输出与会话历史。</p>
     <p class="sub" id="session-label" style="margin-top:-8px">当前：新会话</p>
+    <p class="sub" id="memory-label" style="margin-top:-8px"></p>
     <div class="field">
       <label for="question">问题</label>
       <textarea id="question" placeholder="例如：这份制度里请假流程是什么？"></textarea>
@@ -71,6 +76,16 @@
 
     function setSessionLabel(text) {
       document.getElementById('session-label').textContent = '当前：' + text;
+    }
+
+    function renderMemory(memory) {
+      const el = document.getElementById('memory-label');
+      if (!memory) { el.textContent = ''; return; }
+      if (!memory.enabled) { el.textContent = '记忆：已关闭（本次提问不携带历史）'; return; }
+      if (!memory.memory_used) { el.textContent = '记忆：暂无历史，本次为首轮对话'; return; }
+      el.textContent = `记忆：最近 ${memory.turns} 条对话` +
+        (memory.summary_used ? ` + 历史摘要 ${memory.summary_chars} 字` : '') +
+        (memory.budget_chars ? `（预算 ${memory.budget_chars} 字）` : '');
     }
 
     async function loadSessions() {
@@ -109,6 +124,10 @@
           `<li>[${i + 1}] 《${KB.escapeHtml(s.title || '')}》 ${KB.escapeHtml(s.snippet || '')}</li>`
         ).join('');
         document.getElementById('steps').innerHTML = '';
+        try {
+          const mem = await KB.api('/api/qa/sessions/' + id + '/memory/', { headers: KB.headersAuth });
+          renderMemory(mem);
+        } catch (_) {}
         KB.setMsg(document.getElementById('ask-msg'), '已加载会话历史', 'ok');
       } catch (e) {
         KB.setMsg(document.getElementById('ask-msg'), e.message, 'err');
@@ -124,12 +143,32 @@
     document.getElementById('new-session-btn').addEventListener('click', () => {
       currentSessionId = null;
       setSessionLabel('新会话');
+      renderMemory(null);
       document.getElementById('question').value = '';
       document.getElementById('answer').textContent = '回答会显示在这里';
       document.getElementById('sources').innerHTML = '';
       document.getElementById('steps').innerHTML = '';
       KB.setMsg(document.getElementById('ask-msg'), '');
       loadSessions();
+    });
+
+    document.getElementById('clear-memory-btn').addEventListener('click', async () => {
+      const msg = document.getElementById('ask-msg');
+      if (!currentSessionId) {
+        KB.setMsg(msg, '请先打开或创建一个会话', 'err');
+        return;
+      }
+      if (!window.confirm('清空当前会话的记忆摘要？对话消息会保留。')) return;
+      try {
+        await KB.api('/api/qa/sessions/' + currentSessionId + '/memory/', {
+          method: 'DELETE',
+          headers: KB.headersAuth,
+        });
+        renderMemory({ enabled: true, memory_used: false });
+        KB.setMsg(msg, '已清空会话记忆', 'ok');
+      } catch (e) {
+        KB.setMsg(msg, e.message || '清空失败', 'err');
+      }
     });
 
     function setProgress(pct, show) {
@@ -252,6 +291,7 @@
         }
         KB.setMsg(msg, `完成（${data.engine || 'langgraph'}），命中 ${data.hit_count || 0} 条` +
           (data.elapsed_ms != null ? `，${data.elapsed_ms}ms` : ''), 'ok');
+        renderMemory(data.memory);
         await loadSessions();
       } catch (err) {
         if (!document.getElementById('use-stream').checked) answerEl.textContent = '';
