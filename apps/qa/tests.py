@@ -5,7 +5,8 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
-from qa.graph import run_qa
+from common.models import AuditLog
+from qa.graph import _topic_scope, run_qa
 from qa.memory import build_memory, update_rolling_summary
 from qa.models import QAMessage, QuestionSession
 
@@ -71,6 +72,46 @@ class QASessionAPITests(TestCase):
         sessions = self.client.get('/api/qa/sessions/')
         self.assertEqual(sessions.status_code, 200)
         self.assertGreaterEqual(len(sessions.data['results']), 1)
+
+    def test_delete_session_removes_messages_and_audits(self):
+        session = QuestionSession.objects.create(user=self.user, title='待删除')
+        QAMessage.objects.create(
+            session=session, role=QAMessage.Role.USER, content='问'
+        )
+        QAMessage.objects.create(
+            session=session, role=QAMessage.Role.ASSISTANT, content='答'
+        )
+
+        res = self.client.delete(f'/api/qa/sessions/{session.id}/')
+        self.assertEqual(res.status_code, 204, res.content)
+        self.assertFalse(QuestionSession.objects.filter(pk=session.id).exists())
+        self.assertEqual(
+            QAMessage.objects.filter(session_id=session.id).count(), 0
+        )
+        self.assertTrue(
+            AuditLog.objects.filter(
+                action=AuditLog.Action.SESSION_DELETE,
+                object_id=str(session.id),
+            ).exists()
+        )
+
+    def test_delete_session_hides_other_users_session(self):
+        other = User.objects.create_user(
+            username='other_del', password='Passw0rd!'
+        )
+        other_session = QuestionSession.objects.create(
+            user=other, title='别人的会话'
+        )
+
+        res = self.client.delete(f'/api/qa/sessions/{other_session.id}/')
+        self.assertEqual(res.status_code, 404, res.content)
+        self.assertTrue(
+            QuestionSession.objects.filter(pk=other_session.id).exists()
+        )
+
+    def test_delete_missing_session_returns_404(self):
+        res = self.client.delete('/api/qa/sessions/999999/')
+        self.assertEqual(res.status_code, 404)
 
 
 @override_settings(
@@ -425,3 +466,80 @@ class GraphMemoryTests(TestCase):
         self.assertFalse(
             any('请假需要主管审批' in m['content'] for m in generate_prompt)
         )
+
+
+@override_settings(RETRIEVAL_TOPIC_SCOPE=True)
+class TopicScopeTests(TestCase):
+    """检索后按主题收敛，避免「问 Python 却把 Django/MySQL 一起答了」。"""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='scope_user', password='Passw0rd!'
+        )
+
+    @staticmethod
+    def _hit(topic, chunk_index, score):
+        return {
+            'content': f'{topic} 章节的内容片段。',
+            'score': score,
+            'metadata': {
+                'title': '面试题',
+                'topic': topic,
+                'section': f'一、{topic}',
+                'chunk_index': chunk_index,
+            },
+        }
+
+    def test_scope_keeps_only_the_matched_topic(self):
+        hits = [
+            self._hit('Django', 0, 0.90),
+            self._hit('Python', 1, 0.80),
+            self._hit('MySQL', 2, 0.70),
+        ]
+        scoped, topics = _topic_scope(hits, 'python 面试题的答案')
+        self.assertEqual(topics, ['Python'])
+        self.assertEqual([h['metadata']['topic'] for h in scoped], ['Python'])
+
+    def test_scope_is_noop_without_topic_word(self):
+        hits = [self._hit('Django', 0, 0.9), self._hit('Python', 1, 0.8)]
+        scoped, topics = _topic_scope(hits, '面试题有哪些')
+        self.assertEqual(topics, [])
+        self.assertEqual(len(scoped), 2)
+
+    def test_scope_is_noop_when_everything_matches(self):
+        hits = [self._hit('Python', 0, 0.9), self._hit('Python', 1, 0.8)]
+        scoped, topics = _topic_scope(hits, 'python 面试题')
+        self.assertEqual(topics, [])
+        self.assertEqual(len(scoped), 2)
+
+    def test_scope_is_noop_without_topic_metadata(self):
+        hits = [{'content': 'x', 'score': 0.5, 'metadata': {'chunk_index': 0}}]
+        scoped, topics = _topic_scope(hits, 'python')
+        self.assertEqual(topics, [])
+        self.assertEqual(len(scoped), 1)
+
+    @patch('documents.services.vectorstore.search_similar')
+    @patch('qa.graph.get_chat_llm')
+    def test_run_qa_only_feeds_scoped_hits_to_generate(
+        self, mock_llm, mock_search
+    ):
+        mock_search.return_value = [
+            self._hit('Django', 0, 0.90),
+            self._hit('Python', 1, 0.80),
+        ]
+        fake = FakeLLM(
+            [
+                'Python 面试题 答案',
+                '{"grade": "sufficient", "reason": "ok"}',
+                '只回答 Python 部分。',
+            ]
+        )
+        mock_llm.return_value = fake
+
+        result = run_qa(self.user, 'Python 的面试题答案', top_k=5)
+
+        self.assertEqual(result['hit_count'], 1)
+        self.assertEqual(result['sources'][0]['section'], '一、Python')
+        user_prompt = fake.calls[-1][-1]['content']
+        self.assertIn('Python 章节的内容片段', user_prompt)
+        self.assertNotIn('Django 章节的内容片段', user_prompt)

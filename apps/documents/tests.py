@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from accounts.models import Department
 from documents.models import Document
-from documents.services.chunking import split_text
+from documents.services.chunking import split_document, split_text
 
 User = get_user_model()
 
@@ -18,6 +18,75 @@ class ChunkingTests(SimpleTestCase):
         parts = split_text(text)
         self.assertTrue(len(parts) >= 2)
         self.assertTrue(all(p for p in parts))
+
+
+@override_settings(
+    CHUNK_SIZE=800,
+    CHUNK_OVERLAP=100,
+    CHUNK_STRUCTURED=True,
+    CHUNK_MIN_SIZE=0,
+)
+class StructuredChunkingTests(SimpleTestCase):
+    """按章节 + 条目切块：题目与答案同块，并带主题元数据。"""
+
+    TEXT = (
+        '一、Python\n\n'
+        '1. 列表和元组的区别？\n\n答案要点：\n\n列表可变，元组不可变。\n\n'
+        '2. 装饰器是什么？\n\n答案要点：\n\n接收函数并返回新函数。\n\n'
+        '二、Django\n\n'
+        '1. MTV 是什么？\n\n答案要点：\n\n模型、模板、视图。\n'
+    )
+
+    def test_question_and_answer_stay_in_one_chunk(self):
+        chunks = split_document(self.TEXT)
+        self.assertEqual([c.topic for c in chunks], ['Python', 'Python', 'Django'])
+        self.assertEqual(chunks[0].section, '一、Python')
+        self.assertIn('列表和元组的区别', chunks[0].content)
+        self.assertIn('列表可变', chunks[0].content)
+        self.assertTrue(chunks[0].content.startswith('【一、Python】'))
+        self.assertIn('列表和元组的区别', chunks[0].item)
+
+    def test_markdown_heading_is_section(self):
+        chunks = split_document('## 一、Python\n\n1. 问题A？\n\n答案A。\n')
+        self.assertEqual(len(chunks), 1)
+        self.assertEqual(chunks[0].topic, 'Python')
+
+    def test_code_comment_is_not_a_section(self):
+        text = (
+            '一、Python\n\n'
+            '1. 如何实现单例？\n\n答案要点：\n\npython\nclass Singleton:\n'
+            'def __new__(cls):\n# 可以修改dct\nreturn super().__new__(cls)\n'
+        )
+        chunks = split_document(text)
+        self.assertTrue(chunks)
+        self.assertTrue(all(c.topic == 'Python' for c in chunks))
+
+    def test_fenced_code_heading_is_ignored(self):
+        text = (
+            '## 一、Python\n\n'
+            '1. 装饰器是什么？\n\n答案要点：\n\n```python\n# 这不是标题\nx = 1\n```\n'
+        )
+        chunks = split_document(text)
+        self.assertEqual([c.topic for c in chunks], ['Python'])
+
+    def test_short_items_merge_within_same_section(self):
+        with override_settings(CHUNK_MIN_SIZE=400):
+            chunks = split_document(self.TEXT)
+        # Python 章节的两条短条目合并成一块，且不跨到 Django
+        self.assertEqual([c.topic for c in chunks], ['Python', 'Django'])
+        self.assertIn('装饰器', chunks[0].content)
+
+    def test_plain_text_has_no_topic(self):
+        with override_settings(CHUNK_SIZE=50, CHUNK_OVERLAP=0):
+            chunks = split_document('甲' * 120 + '\n\n' + '乙' * 120)
+        self.assertTrue(len(chunks) >= 2)
+        self.assertTrue(all(c.content for c in chunks))
+        self.assertTrue(all(c.topic == '' for c in chunks))
+
+    def test_unstructured_setting_falls_back(self):
+        with override_settings(CHUNK_STRUCTURED=False, CHUNK_SIZE=50, CHUNK_OVERLAP=0):
+            chunks = split_document(self.TEXT)
+        self.assertTrue(all(c.section == '' and c.topic == '' for c in chunks))
 
 
 @override_settings(
