@@ -1,6 +1,44 @@
 # SmartKBQA — 企业知识库智能问答
 
-基于 Django + DRF + JWT + Celery + Chroma + LangGraph + DeepSeek 的多角色企业知识库问答系统。
+[![CI](https://github.com/ZHANGZILONG-long/smart-kbqa-rag/actions/workflows/tests.yml/badge.svg)](https://github.com/ZHANGZILONG-long/smart-kbqa-rag/actions/workflows/tests.yml)
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
+![Django](https://img.shields.io/badge/Django-4.2-092E20)
+![LangGraph](https://img.shields.io/badge/LangGraph-RAG-1c3d5a)
+
+基于 Django + DRF + JWT + Celery + Chroma + LangGraph + DeepSeek 的多角色企业知识库问答系统，覆盖三种角色、文档审批、异步入库、多轮记忆与流式问答。
+
+## 系统架构
+
+```mermaid
+flowchart TB
+  UI["浏览器工作台<br/>登录 / 问答 / 文档 / 上传 / 员工"]
+  AUTH["JWT 认证 + 三角色权限"]
+  THROTTLE["接口限流"]
+  QA["问答接口（支持 SSE 流式）"]
+  GRAPH["LangGraph<br/>改写 → 检索 → 评分 → 重试 → 生成"]
+  MEM["会话记忆<br/>滑动窗口 + 滚动摘要"]
+  PROC["Celery：解析 + 结构化切块"]
+  DB[("MySQL<br/>用户 / 文档 / 会话 / 审计")]
+  REDIS[("Redis<br/>缓存 / 队列 / 限流")]
+  CHROMA[("Chroma<br/>向量库")]
+  EMB["Embedding<br/>bge-small-zh"]
+  DS["DeepSeek<br/>生成 / 改写 / 摘要"]
+
+  UI --> AUTH --> THROTTLE --> QA
+  QA --> GRAPH
+  GRAPH --> CHROMA
+  GRAPH --> DS
+  GRAPH --> MEM
+  MEM --> DB
+  QA --> DB
+  UI --> PROC
+  PROC --> EMB --> CHROMA
+  PROC --> DB
+  THROTTLE --> REDIS
+```
+
+- **文档入库**：上传 → 解析（PDF / DOCX / TXT）→ 按章节与编号条目结构化切块 → 写入向量库并记录审计；部门文档需总管理员审批后才入库
+- **问答链路**：问题 + 对话历史 → 指代消解改写 → 向量检索（多召回后按主题收敛）→ 相关性评分 → 资料不足时换词重试 → 生成回答并引用资料编号 → 落库后异步滚动摘要
 
 ## 功能概览
 
@@ -49,7 +87,7 @@ python manage.py runserver
 python manage.py test accounts documents qa common -v 2
 ```
 
-测试使用内存 SQLite + LocMem 缓存（`test` 命令自动启用）。
+测试使用内存 SQLite + LocMem 缓存（`test` 命令自动启用），不依赖 MySQL / Redis，也不会下载 embedding 模型（向量检索与 LLM 调用已 mock）。最近一次结果见页面顶部的 CI 徽章。
 
 ### 3. 异步 Worker（可选）
 
