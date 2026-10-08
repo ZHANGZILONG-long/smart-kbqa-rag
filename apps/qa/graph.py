@@ -112,6 +112,7 @@ def hits_to_sources(hits: list[dict]) -> list[dict]:
             {
                 'document_id': meta.get('document_id'),
                 'title': meta.get('title'),
+                'section': meta.get('section') or '',
                 'chunk_index': meta.get('chunk_index'),
                 'score': hit.get('score'),
                 'snippet': (hit.get('content') or '')[:240],
@@ -138,6 +139,39 @@ def _access_where(state: QAState) -> dict | None:
             ]
         }
     return {'visibility': {'$eq': 'public'}}
+
+
+def _topic_scope(hits: list[dict], query: str) -> tuple[list[dict], list[str]]:
+    """按主题收敛召回结果。
+
+    检索词里点到哪个主题（如 ``Python``），就只保留该主题（章节）的片段，
+    避免「问 Python 却把 Django/MySQL 的答案也带进来」。没有明确主题或收敛
+    之后一条不剩时，原样返回。
+    """
+    if not hits or not query:
+        return hits, []
+    if not bool(getattr(settings, 'RETRIEVAL_TOPIC_SCOPE', True)):
+        return hits, []
+
+    query_lower = query.lower()
+    matched: list[str] = []
+    for hit in hits:
+        topic = str((hit.get('metadata') or {}).get('topic') or '').strip()
+        if len(topic) < 2 or topic.isdigit():
+            continue
+        if topic.lower() in query_lower and topic not in matched:
+            matched.append(topic)
+    if not matched:
+        return hits, []
+
+    scoped = [
+        hit
+        for hit in hits
+        if str((hit.get('metadata') or {}).get('topic') or '').strip() in matched
+    ]
+    if not scoped or len(scoped) >= len(hits):
+        return hits, []
+    return scoped, matched
 
 
 def _history_lines(
@@ -200,8 +234,13 @@ def rewrite_node(state: QAState) -> dict:
 
     if llm is not None and question:
         history_hint = (
-            '用户问题可能是依赖上下文的追问（如"它""这个制度""那上面说的"），'
-            '请结合对话历史补全指代，输出能独立成立的中文查询。'
+            '用户问题可能是依赖上下文的追问（如"它""这个制度""那答案呢"）。'
+            '请结合对话历史补全指代，输出能独立成立的中文查询，并遵守：'
+            '①若追问只是要求"答案/展开/继续/详细/全部/还有呢"，请沿用上一轮讨论的'
+            '主题范围（例如上一轮问的是"Python 面试题"，本次就输出"Python 面试题的答案"），'
+            '不要把范围缩小到上一轮回答里提到的某个具体条目；'
+            '②若问题本身已包含主题词（如"Python""请假"），必须原样保留；'
+            '③不要回答问题。'
             if history_block
             else ''
         )
@@ -250,10 +289,17 @@ def retrieve_node(state: QAState) -> dict:
     query = (state.get('search_query') or state.get('question') or '').strip()
     top_k = int(state.get('top_k') or 5)
     attempt = int(state.get('attempt') or 0)
-    # 扩检索时适当加大 top_k
-    n = top_k if attempt == 0 else min(10, top_k + 3)
+    # 先多召回一批，再按主题收敛；扩检索时适当加大
+    multiplier = int(getattr(settings, 'RETRIEVAL_POOL_MULTIPLIER', 3) or 1)
+    max_pool = int(getattr(settings, 'RETRIEVAL_MAX_POOL', 20) or 20)
+    base = top_k if attempt == 0 else min(10, top_k + 3)
+    n = max(1, min(max_pool, max(base, top_k * max(1, multiplier))))
     where = _access_where(state)
-    hits = search_similar(query, top_k=n, where=where) if query else []
+    candidates = search_similar(query, top_k=n, where=where) if query else []
+    hits, topics = _topic_scope(candidates, query)
+    detail = f'召回 {len(candidates)} 条'
+    if topics:
+        detail += f'，按主题「{"、".join(topics)}」收敛为 {len(hits)} 条'
     return {
         'hits': hits,
         'attempt': attempt + 1,
@@ -261,9 +307,11 @@ def retrieve_node(state: QAState) -> dict:
             state.get('steps'),
             {
                 'node': 'retrieve',
-                'detail': f'检索到 {len(hits)} 条',
+                'detail': detail,
                 'search_query': query,
                 'top_k': n,
+                'candidate_count': len(candidates),
+                'scoped_topics': topics,
                 'best_score': hits[0].get('score') if hits else None,
             },
         ),
@@ -350,27 +398,29 @@ def route_after_grade(state: QAState) -> Literal['expand_retrieve', 'generate']:
 
 
 def expand_retrieve_node(state: QAState) -> dict:
-    """检索不足时，扩展/简化查询后再检索。"""
+    """检索不足时，换一种说法再检索；必须保留上文主题，避免跑题。"""
     question = (state.get('question') or '').strip()
     prev = (state.get('search_query') or question).strip()
     llm = get_chat_llm(temperature=0)
-    search_query = question
+
+    lines = _history_lines(state)
+    history_block = ('对话历史：\n' + '\n'.join(lines) + '\n\n') if lines else ''
 
     if llm is not None:
         prompt = (
-            '上一轮知识库检索结果不足。请给出另一个更宽泛或换个说法的中文检索查询，'
-            '便于召回相关制度/流程文档。只输出查询文本。\n'
-            f'原问题：{question}\n上一轮查询：{prev}'
+            '上一轮知识库检索结果不足。请给出另一个更宽泛、或换个说法的中文检索查询，'
+            '便于召回相关资料。要求：必须保留原问题的主题词（如"Python""请假""报销"），'
+            '不要引入无关的新主题；只输出查询文本。\n'
+            f'{history_block}原问题：{question}\n上一轮查询：{prev}'
         )
         try:
             rewritten = _llm_text(llm.invoke(prompt)).strip().strip('"\'')
-            if rewritten:
-                search_query = rewritten[:300]
+            search_query = rewritten[:300] if rewritten else prev
         except Exception:
-            # 回退：拼接关键词式扩展
-            search_query = f'{question} 制度 流程 规定'
+            search_query = prev
     else:
-        search_query = f'{question} 制度 流程 规定'
+        # 无 LLM：沿用已解析的检索词，不再凭空追加领域词
+        search_query = prev or question
 
     return {
         'search_query': search_query,
@@ -378,7 +428,7 @@ def expand_retrieve_node(state: QAState) -> dict:
             state.get('steps'),
             {
                 'node': 'expand_retrieve',
-                'detail': '扩展检索词后再次检索',
+                'detail': '换词后再次检索（保留主题）',
                 'search_query': search_query,
             },
         ),
@@ -441,6 +491,9 @@ def generate_node(state: QAState) -> dict:
     system += (
         '若资料不足，请明确说明不知道，不要编造。'
         '回答使用简体中文，必要时引用资料编号如 [1]。'
+        '如果资料覆盖多个主题（例如同一文档里的多个章节或科目），'
+        '只选取与用户所问主题一致的内容作答，不要顺带罗列其它主题；'
+        '用户明确要求"只要某主题"时，务必只答该主题。'
     )
     user_prompt = (
         f'{grade_note}资料：\n{context}\n\n用户问题：{question}\n\n请给出回答：'
