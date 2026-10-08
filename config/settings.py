@@ -231,6 +231,22 @@ EMBEDDING_DIM = config('EMBEDDING_DIM', default=384, cast=int)
 
 CHUNK_SIZE = config('CHUNK_SIZE', default=800, cast=int)
 CHUNK_OVERLAP = config('CHUNK_OVERLAP', default=120, cast=int)
+# ---------------------------------------------------------------------------
+# 结构化切块与主题收敛检索
+# CHUNK_STRUCTURED      是否按文档自身的章节/条目结构切块（Markdown 标题、
+#                       「一、Python」「1. xxx」等），保证「题目+答案」不被长度切散
+# CHUNK_MIN_SIZE        结构切块后，短于该长度的条目与同章节的下一条目合并
+# RETRIEVAL_TOPIC_SCOPE 是否按主题收敛召回：问题点到某主题时只保留该主题片段
+# RETRIEVAL_POOL_MULTIPLIER 先按该倍数多召回，再收敛主题，避免收敛后条数不够
+# RETRIEVAL_MAX_POOL    一次检索召回的条数上限
+# ---------------------------------------------------------------------------
+CHUNK_STRUCTURED = config('CHUNK_STRUCTURED', default=True, cast=bool)
+CHUNK_MIN_SIZE = config('CHUNK_MIN_SIZE', default=80, cast=int)
+RETRIEVAL_TOPIC_SCOPE = config('RETRIEVAL_TOPIC_SCOPE', default=True, cast=bool)
+RETRIEVAL_POOL_MULTIPLIER = config(
+    'RETRIEVAL_POOL_MULTIPLIER', default=4, cast=int
+)
+RETRIEVAL_MAX_POOL = config('RETRIEVAL_MAX_POOL', default=24, cast=int)
 
 # ---------------------------------------------------------------------------
 # 多轮会话的记忆上下文管理
