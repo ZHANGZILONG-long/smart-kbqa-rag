@@ -27,7 +27,7 @@ def _send_alert(title: str, detail: dict):
 @shared_task(bind=True, max_retries=3, default_retry_delay=15)
 def process_document_task(self, document_id: int):
     from documents.models import Document, DocumentChunk
-    from documents.services.chunking import split_text
+    from documents.services.chunking import split_document
     from documents.services.parser import extract_text
     from documents.services.vectorstore import delete_document_vectors, upsert_chunks
 
@@ -60,7 +60,7 @@ def process_document_task(self, document_id: int):
         if not text:
             raise ValueError('未能从文件中提取到有效文本')
 
-        chunks = split_text(text)
+        chunks = split_document(text)
         if not chunks:
             raise ValueError('文本分块结果为空')
 
@@ -70,7 +70,7 @@ def process_document_task(self, document_id: int):
         ids = []
         metadatas = []
         chunk_rows = []
-        for idx, content in enumerate(chunks):
+        for idx, chunk in enumerate(chunks):
             chroma_id = f'doc-{document.id}-chunk-{idx}'
             ids.append(chroma_id)
             metadatas.append(
@@ -80,20 +80,22 @@ def process_document_task(self, document_id: int):
                     'visibility': document.visibility,
                     'department_id': document.department_id or 0,
                     'title': document.title[:200],
+                    'section': chunk.section,
+                    'topic': chunk.topic,
                 }
             )
             chunk_rows.append(
                 DocumentChunk(
                     document=document,
                     chunk_index=idx,
-                    content=content,
+                    content=chunk.content,
                     chroma_id=chroma_id,
                 )
             )
 
         upsert_chunks(
             document_id=document.id,
-            texts=chunks,
+            texts=[chunk.content for chunk in chunks],
             ids=ids,
             metadatas=metadatas,
         )
