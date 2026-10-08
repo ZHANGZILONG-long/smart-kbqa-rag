@@ -248,7 +248,22 @@ class SessionDetailView(APIView):
             return Response(
                 {'detail': '会话不存在'}, status=status.HTTP_404_NOT_FOUND
             )
+        # 先取快照，删除后就查不到了；消息随会话级联删除
+        session_id = session.id
+        detail = {
+            'title': session.title,
+            'deleted_messages': session.messages.count(),
+        }
         session.delete()
+        write_audit(
+            request=request,
+            user=request.user,
+            action=AuditLog.Action.SESSION_DELETE,
+            object_type='session',
+            object_id=session_id,
+            detail=detail,
+            status_code=204,
+        )
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 

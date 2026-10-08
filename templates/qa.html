@@ -5,15 +5,28 @@
 <style>
   .qa-layout { display: grid; grid-template-columns: 240px 1fr; gap: 16px; }
   @media (max-width: 800px) { .qa-layout { grid-template-columns: 1fr; } }
+  .session-row { display: flex; gap: 6px; align-items: stretch; margin-bottom: 6px; }
   .session-item {
-    display: block; width: 100%; text-align: left;
-    padding: 10px 12px; margin-bottom: 6px; border-radius: 10px;
+    display: block; flex: 1; min-width: 0; text-align: left;
+    padding: 10px 12px; border-radius: 10px;
     border: 1px solid var(--line); background: transparent; color: var(--text);
     cursor: pointer; font: inherit;
   }
   .session-item:hover, .session-item.active { border-color: var(--primary); background: #1e293b; }
   .session-item .t { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .session-item .d { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  /* 删除整个会话：常显但弱化，悬停该行或聚焦时高亮，避免入口被忽略 */
+  .session-del {
+    flex: 0 0 auto; padding: 0 9px; border-radius: 10px;
+    border: 1px solid var(--line); background: transparent; color: var(--muted);
+    cursor: pointer; font: inherit; font-size: 12px; line-height: 1;
+    white-space: nowrap;
+    opacity: .6; transition: opacity .15s, color .15s, border-color .15s;
+  }
+  .session-row:hover .session-del, .session-del:focus-visible { opacity: 1; }
+  .session-del:hover { color: var(--danger); border-color: #7f1d1d; }
+  .session-del:disabled { opacity: .35; cursor: not-allowed; }
+  @media (max-width: 800px), (hover: none) { .session-del { opacity: 1; } }
   .progress-bar {
     height: 6px; background: var(--line); border-radius: 999px; overflow: hidden; margin-top: 10px;
   }
@@ -32,10 +45,14 @@
       <button type="button" id="new-session-btn" style="padding:4px 10px;font-size:12px">新会话</button>
     </div>
     <div id="session-list"><p class="sub">加载中…</p></div>
-    <button type="button" id="clear-memory-btn"
-            style="margin-top:10px;padding:5px 10px;font-size:12px;width:100%">
-      清空当前会话记忆
-    </button>
+    <div class="row" style="margin-top:10px;gap:8px">
+      <button type="button" id="clear-memory-btn" style="padding:5px 10px;font-size:12px;flex:1">
+        清空当前会话记忆
+      </button>
+      <button type="button" id="delete-session-btn" class="danger" style="padding:5px 10px;font-size:12px;flex:1">
+        删除当前会话
+      </button>
+    </div>
   </section>
 
   <section class="card">
@@ -98,10 +115,14 @@
           return;
         }
         box.innerHTML = rows.map(s => `
-          <button type="button" class="session-item ${s.id === currentSessionId ? 'active' : ''}" data-sid="${s.id}">
-            <div class="t">${KB.escapeHtml(s.title || ('会话 #' + s.id))}</div>
-            <div class="d">${KB.escapeHtml(String(s.updated_at || '').replace('T', ' ').slice(0, 19))}</div>
-          </button>
+          <div class="session-row">
+            <button type="button" class="session-item ${s.id === currentSessionId ? 'active' : ''}" data-sid="${s.id}">
+              <div class="t">${KB.escapeHtml(s.title || ('会话 #' + s.id))}</div>
+              <div class="d">${KB.escapeHtml(String(s.updated_at || '').replace('T', ' ').slice(0, 19))}</div>
+            </button>
+            <button type="button" class="session-del" data-del-sid="${s.id}"
+                    title="删除整个会话" aria-label="删除会话">删除</button>
+          </div>
         `).join('');
       } catch (e) {
         box.innerHTML = `<p class="msg err">${KB.escapeHtml(e.message)}</p>`;
@@ -135,12 +156,17 @@
     }
 
     document.getElementById('session-list').addEventListener('click', (e) => {
+      const del = e.target.closest('[data-del-sid]');
+      if (del) {
+        deleteSession(Number(del.getAttribute('data-del-sid')), del);
+        return;
+      }
       const btn = e.target.closest('[data-sid]');
       if (!btn) return;
       openSession(Number(btn.getAttribute('data-sid')));
     });
 
-    document.getElementById('new-session-btn').addEventListener('click', () => {
+    function resetToNewSession() {
       currentSessionId = null;
       setSessionLabel('新会话');
       renderMemory(null);
@@ -148,8 +174,50 @@
       document.getElementById('answer').textContent = '回答会显示在这里';
       document.getElementById('sources').innerHTML = '';
       document.getElementById('steps').innerHTML = '';
+    }
+
+    async function deleteSession(id, triggerBtn) {
+      const msg = document.getElementById('ask-msg');
+      if (!window.confirm('删除整个会话？该会话的全部对话记录会被永久删除，无法恢复。')) {
+        return;
+      }
+      // 请求期间禁用全部删除入口，避免重复点击造成多删
+      const buttons = [
+        ...document.querySelectorAll('[data-del-sid]'),
+        document.getElementById('delete-session-btn'),
+      ].filter(Boolean);
+      const originalText = triggerBtn ? triggerBtn.textContent : '';
+      buttons.forEach(b => { b.disabled = true; });
+      if (triggerBtn) triggerBtn.textContent = '删除中…';
+      try {
+        await KB.api('/api/qa/sessions/' + id + '/', {
+          method: 'DELETE',
+          headers: KB.headersAuth,
+        });
+        if (currentSessionId === id) resetToNewSession();
+        KB.setMsg(msg, '已删除会话 #' + id, 'ok');
+        await loadSessions();
+      } catch (e) {
+        KB.setMsg(msg, e.message || '删除失败', 'err');
+      } finally {
+        buttons.forEach(b => { b.disabled = false; });
+        if (triggerBtn) triggerBtn.textContent = originalText;
+      }
+    }
+
+    document.getElementById('new-session-btn').addEventListener('click', () => {
+      resetToNewSession();
       KB.setMsg(document.getElementById('ask-msg'), '');
       loadSessions();
+    });
+
+    document.getElementById('delete-session-btn').addEventListener('click', (e) => {
+      const msg = document.getElementById('ask-msg');
+      if (!currentSessionId) {
+        KB.setMsg(msg, '请先打开或创建一个会话', 'err');
+        return;
+      }
+      deleteSession(currentSessionId, e.currentTarget);
     });
 
     document.getElementById('clear-memory-btn').addEventListener('click', async () => {
