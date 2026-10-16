@@ -14,7 +14,15 @@ langchain-chroma
 langchain-text-splitters
 langgraph
 chromadb
-sentence-transformers
+
+# 本地 embedding 推理需要 transformers 4.x：
+# transformers 5.x 改变了模型处理类(AutoProcessor)的加载路径，
+# 加载 BERT 架构的 BAAI/bge-* 模型会报
+#   "Unrecognized processing class ... Can't instantiate a processor"
+# 因此这里必须限制上限，否则全新安装会直接跑不起来。
+transformers>=4.40,<5
+sentence-transformers>=3.0
+
 pypdf
 python-docx
 pybloom-live

@@ -1,0 +1,13 @@
+# 统一行尾符，避免 Windows 上 `__init__.py` 等文件反复出现"无内容差异"的改动
+* text=auto
+*.py text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.sh text eol=lf
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.docx binary
+*.pdf binary
+*.png binary
+*.jpg binary
