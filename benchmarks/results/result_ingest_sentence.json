@@ -1,0 +1,28 @@
+{
+  "provider": "sentence",
+  "model": "BAAI/bge-small-zh-v1.5",
+  "device": "cpu",
+  "cold_start_s": 1.559,
+  "docs": {
+    "doc_id": 1,
+    "title": "面试题",
+    "file_type": "docx",
+    "file_kb": 21.4,
+    "parse_ms": 66.8,
+    "text_chars": 6292,
+    "chunk_ms": 1.2,
+    "chunks": 39,
+    "avg_chunk_chars": 169,
+    "embed_ms": 1697.8,
+    "upsert_ms": 1674.5,
+    "e2e_ms": 2074.2,
+    "ok": true,
+    "status": "ready",
+    "chunk_count_db": 39
+  },
+  "search_ms": {
+    "p50": 23.9,
+    "max": 28.0
+  },
+  "note": "docx 文档《面试题》21.4KB；设备为 CPU-only 推理；LLM 调用已排除"
+}

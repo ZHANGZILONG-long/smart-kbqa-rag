@@ -1,0 +1,44 @@
+{
+  "worker_pool": "solo",
+  "worker_concurrency": 1,
+  "device": "cpu",
+  "worker_warmup_s": 10.5,
+  "rows": [
+    {
+      "label": "小 40 段",
+      "kb": 11.9,
+      "api_ms": 11.1,
+      "e2e_ms": 637.3,
+      "chunks": 40,
+      "status_immediate": "pending",
+      "status_final": "ready"
+    },
+    {
+      "label": "中 120 段",
+      "kb": 35.8,
+      "api_ms": 12.2,
+      "e2e_ms": 1841.7,
+      "chunks": 120,
+      "status_immediate": "processing",
+      "status_final": "ready"
+    },
+    {
+      "label": "大 240 段",
+      "kb": 72.3,
+      "api_ms": 11.7,
+      "e2e_ms": 4401.0,
+      "chunks": 240,
+      "status_immediate": "pending",
+      "status_final": "ready"
+    }
+  ],
+  "worker_task_s": [
+    0.5940000000009604,
+    1.8119999999980791,
+    4.359000000000378
+  ],
+  "avg_api_ms": 11.7,
+  "avg_worker_ms": 2255.0,
+  "avg_chunks": 133.3,
+  "note": "单机单 worker；LLM 调用已排除"
+}
